@@ -1,0 +1,10 @@
+{
+  "name": "perf-benchmark-web-app",
+  "version": "0.4.0",
+  "description": "Local Web control plane for perf-benchmark",
+  "license": "UNLICENSED",
+  "bin": {
+    "perf-benchmark-web-app": "bin/perf-benchmark-web-app.js"
+  },
+  "files": ["bin"]
+}

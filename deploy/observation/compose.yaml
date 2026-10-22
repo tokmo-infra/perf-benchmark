@@ -1,0 +1,37 @@
+name: perf-benchmark-observation
+services:
+  observation:
+    image: ${OBSERVATION_IMAGE:-perf-observation:local}
+    build:
+      context: .
+    restart: unless-stopped
+    stop_grace_period: 180s
+    environment:
+      WORKBENCH_PUBLIC_URL: ${WORKBENCH_PUBLIC_URL:-http://127.0.0.1:8088}
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD
+        in deploy/.env}
+    volumes:
+    - observation:/data
+    - ./targets:/etc/alloy/targets:ro
+    - ./logs:/var/log/perf-benchmark:ro
+    ports:
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:12345:12345
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:4317:4317
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:4318:4318
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:9999:9999
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:9090:9090
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:3200:3200
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:3100:3100
+    - ${OBSERVATION_BIND_IP:-0.0.0.0}:4040:4040
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    container_name: perf-observation
+volumes:
+  observation: {}
+networks:
+  default:
+    name: ${OBSERVATION_NETWORK:-perf-observation}
+    external: true

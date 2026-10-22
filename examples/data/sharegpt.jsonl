@@ -1,0 +1,1 @@
+{"id":"sharegpt-example","conversations":[{"from":"human","value":"What is 2 + 2?"},{"from":"gpt","value":"4"},{"from":"human","value":"Multiply that by 3."},{"from":"gpt","value":"12"}]}

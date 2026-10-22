@@ -1,0 +1,68 @@
+name: remote-gpu-benchmark
+logging:
+  level: INFO
+  stream: stderr
+pipeline:
+  loader:
+    plugin: hf-datasets
+    settings:
+      dataset: json
+      data_files:
+      - data/requests.jsonl
+      split: train
+      cache_dir: ~/.cache/perf-benchmark/datasets
+      batch_rows: 128
+  normalization:
+    plugin: openai-messages
+    settings:
+      tokenizer_path: tokenizer
+  selector:
+    plugin: all
+  executor:
+    plugin: openai-chat
+    settings:
+      base_url: http://gpu-server.internal:8000
+      model: model-a
+      stream: true
+      timeout_seconds: 60
+      max_tokens: 50
+  scheduler:
+    plugin: single-turn-closed-loop
+    settings:
+      max_concurrency: 1
+      stop:
+        session_count: 2
+      on_exhausted: error
+  metrics:
+    plugin: standard
+    settings:
+      steady:
+        min_ratio: 0.9
+        min_duration_s: 1.0
+  saver:
+    plugin: sqlite
+    settings:
+      path: results/run-a.db
+  exporter: {}
+observation:
+  enabled: true
+  host: 0.0.0.0
+  port: 0
+  discovery_dir: observation/targets
+  advertise_host: host.docker.internal
+  poll_seconds: 2
+  page_size: 500
+  sample_rate: 0.01
+  slow_seconds: 10
+  slow_spans_per_second: 20
+  otlp_endpoint: http://127.0.0.1:4318/v1/traces
+  targets:
+    engines:
+    - address: gpu-server.internal:8000
+      service_name: inference
+      engine: vllm
+      model: model-a
+    gpu:
+    - address: gpu-server.internal:9400
+      service_name: dcgm
+    profiles: []

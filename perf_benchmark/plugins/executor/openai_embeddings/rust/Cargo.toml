@@ -1,0 +1,10 @@
+[package]
+name = "perf-openai-embeddings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+perf-rusthttp = { path = "../../../../runtime/http/rusthttp" }
+serde.workspace = true
+serde_json.workspace = true

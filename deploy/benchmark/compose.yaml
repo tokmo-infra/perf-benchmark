@@ -1,0 +1,63 @@
+name: perf-benchmark-tools
+services:
+  benchmark:
+    container_name: perf-benchmark
+    image: ${PERF_BENCHMARK_IMAGE:-perf-benchmark:local}
+    build:
+      context: ../..
+      dockerfile: deploy/benchmark/Dockerfile
+    user: ${BENCHMARK_UID:-10001}:${BENCHMARK_GID:-10001}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    environment:
+      PERF_TARGET_API_KEY: ${PERF_TARGET_API_KEY:-}
+    volumes:
+    - workspace:/work
+    - result-coordination:/work/cache/perf-benchmark/result-sealing
+    - ${BENCHMARK_CONFIG:?Set config directory}:/work/config
+    - ${BENCHMARK_DATA:?Set data directory}:/work/data:ro
+    - ${BENCHMARK_TOKENIZER:?Set tokenizer directory}:/work/tokenizer:ro
+    - ../observation/targets:/work/targets
+    - ../observation/logs:/work/logs
+  results:
+    image: ${PERF_BENCHMARK_IMAGE:-perf-benchmark:local}
+    user: ${BENCHMARK_UID:-10001}:${BENCHMARK_GID:-10001}
+    init: true
+    restart: unless-stopped
+    command: ["perf-benchmark", "results", "serve", "--root", "/work/results", "--host", "0.0.0.0",
+              "--prometheus-url", "http://observation:9090", "--loki-url", "http://observation:3100",
+              "--tempo-url", "http://observation:3200", "--grafana-url", "${WORKBENCH_PUBLIC_URL:-http://127.0.0.1:8088}/grafana"]
+    volumes:
+    - workspace:/work:ro
+    - result-coordination:/work/cache/perf-benchmark/result-sealing
+    expose:
+    - "8088"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8088/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+  workbench:
+    image: nginx:1.30.5-alpine
+    init: true
+    restart: unless-stopped
+    depends_on:
+      results:
+        condition: service_healthy
+    volumes:
+    - ./workbench.nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+    - "127.0.0.1:${WORKBENCH_PORT:-8088}:8088"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8088/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+volumes:
+  workspace: {}
+  result-coordination: {}
+networks:
+  default:
+    external: true
+    name: ${OBSERVATION_NETWORK:-perf-observation}

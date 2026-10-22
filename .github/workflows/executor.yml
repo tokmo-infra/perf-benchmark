@@ -1,0 +1,53 @@
+name: Native Executor wheels
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13', '3.14']
+        platform:
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { runner: macos-15-intel, target: x86_64-apple-darwin }
+          - { runner: macos-15, target: aarch64-apple-darwin }
+          - { runner: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.platform.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --omit=peer && npm run build && npm test
+        working-directory: frontend
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.87.0'
+          components: rustfmt, clippy
+      - run: uv sync --locked --extra test
+      - run: uv run python -c "import os,sys; open(os.environ['GITHUB_ENV'],'a').write('PYO3_PYTHON='+sys.executable+'\n')"
+      - run: cargo fmt --manifest-path perf_benchmark/Cargo.toml --all --check
+      - run: cargo test --manifest-path perf_benchmark/Cargo.toml --workspace --locked
+      - run: cargo test --manifest-path perf_benchmark/Cargo.toml --workspace --release --locked
+      - run: cargo clippy --manifest-path perf_benchmark/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - run: uv run pytest tests/executor tests/runtime/test_native_executor.py
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          manylinux: auto
+          rust-toolchain: '1.87.0'
+          args: --release --locked --out dist -i ${{ runner.os == 'Linux' && format('python{0}', matrix.python) || format('"{0}"', env.PYO3_PYTHON) }}
+      - run: uv build --sdist --out-dir dist
+      - run: uv run python tests/executor/verify_installed.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.target }}-cp${{ matrix.python }}
+          path: dist/*

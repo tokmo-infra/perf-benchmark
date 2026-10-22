@@ -1,0 +1,22 @@
+[package]
+name = "perf-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3.workspace = true
+perf-rusthttp = { path = "../../../runtime/http/rusthttp" }
+perf-openai-chat = { path = "../openai_chat/rust" }
+perf-openai-completions = { path = "../openai_completions/rust" }
+perf-openai-responses = { path = "../openai_responses/rust" }
+perf-openai-embeddings = { path = "../openai_embeddings/rust" }
+perf-rerank = { path = "../rerank/rust" }
+perf-trace-inflate = { path = "../../../corpus/rust" }

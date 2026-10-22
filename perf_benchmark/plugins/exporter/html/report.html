@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }} · 请求分析</title>
+<style>
+:root{color-scheme:light;--ink:#172d36;--muted:#597079;--line:#d6dfdd;--paper:#f5f6f2;--accent:#146c64}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 system-ui,sans-serif}header,main{max-width:1440px;margin:auto;padding:28px 40px}header{border-bottom:1px solid var(--line)}h1{font-size:34px;line-height:1.2;margin:12px 0}h2{font-size:25px;margin:0 0 12px}h3{font-size:17px}p{max-width:100ch}small,.muted{color:var(--muted)}nav{display:flex;gap:24px;flex-wrap:wrap}a{color:var(--accent)}section{padding:28px 0 40px;border-bottom:1px solid var(--line)}.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:16px 0}.controls label{display:grid;gap:4px;font-size:13px}select,input,button{font:inherit;padding:8px 12px;border:1px solid #b8c8c4;background:white;color:var(--ink);border-radius:5px}input[type=number]{width:140px}button{cursor:pointer}button:hover,button:focus-visible{border-color:var(--accent);background:#e5efea}button:disabled{opacity:.45;cursor:default}.table-wrap{overflow:auto;max-height:650px;border:1px solid var(--line)}table{border-collapse:collapse;width:100%;background:white;font-size:13px}td,th{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}th{position:sticky;top:0;background:#eaf0ec;font-weight:600;z-index:1}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:0;border:1px solid var(--line);background:white}.summary div{padding:20px;border-right:1px solid var(--line)}.summary strong{display:block;font-size:29px;font-weight:550}.note{padding:12px 16px;background:#eaf0ec;border-left:3px solid var(--accent)}.chart{max-height:520px;overflow:auto;background:white;border:1px solid var(--line);padding:20px}.bar-row{display:grid;grid-template-columns:minmax(160px,28%) 1fr 130px;gap:16px;align-items:center;margin-bottom:8px;font-size:12px}.bar{height:18px;background:#3d8b7f}.bar-label{white-space:normal;overflow-wrap:anywhere}dialog{width:min(1100px,95vw);max-height:90vh;border:1px solid var(--line);border-radius:8px;padding:28px}dialog::backdrop{background:#172d3680}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;background:#f2f5f1;padding:16px}#detail-title{overflow-wrap:anywhere}.badge{color:var(--accent);font-size:12px;letter-spacing:.1em}.empty{padding:24px;color:var(--muted)}@media(max-width:700px){header,main{padding:22px 18px}h1{font-size:27px}.bar-row{grid-template-columns:130px 1fr 85px}}
+</style></head><body>
+<header><div class="badge">PERF-BENCHMARK / OFFLINE ANALYSIS</div><h1>{{ title }}</h1><p class="muted">Run {{ run_id }} · 正式结果来自 SQLite · 正式汇总与趋势</p><nav><a href="#overview">正式结果与覆盖率</a><a href="#cohorts">负载分组</a><a href="#requests">请求详情入口</a><a href="#evidence">外部证据</a></nav></header>
+<main data-grafana="{{ grafana_url }}" data-run="{{ run_id }}">
+<section id="capacity"><h2>容量边界与有效性</h2><p id="capacity-summary"></p><p class="note">证据不足的点不更新容量边界。质量状态独立于性能 SLO。原始数据内容一致性未验证。重复实验的中位数区间不表示请求 P99 或 SLO 超标概率的置信保证。</p><div id="capacity-validity" class="table-wrap"></div><div id="capacity-slo" class="table-wrap"></div></section>
+<section id="overview"><h2>正式结果与覆盖情况</h2><div id="summary" class="summary"></div>
+<div class="controls"><label>Trial<select id="trial"></select></label><label>统计窗口<select id="window"></select></label></div>
+<p id="coverage" class="note"></p><p id="window-description" class="muted"></p><div id="formal" class="table-wrap"></div><details><summary>Run / comparison 已持久化指标</summary><div id="run-metrics" class="table-wrap"></div></details>
+<details id="measurement-semantics"><summary>指标口径与比较条件</summary><p>TTFT 是客户端请求开始到首个文本输出事件的时间；ITL 是相邻文本输出事件的间隔。SSE chunk、输出事件与 token 不等价，这些客户端时间不能直接解释为服务端 prefill、decode 或 GPU 执行时间。</p><p>TPOT 的 token 分母来自服务端 usage；usage 缺失时保留不可用状态，不用输出事件数估算 token。非流式或非文本响应的 TTFT、TPOT、ITL 及 prefill/decode throughput 按 unavailable 显示原因，E2E 仍按已观测到的请求起止时间计算。</p><p>请同时查看有效 / 预期样本、分组成功资格及缺失原因；少量有效样本不能代表全部请求。容量判断还需要负载有效性和 SLO 证据。跨 Run 或工具比较时，应对齐协议与流式设置、数据与 tokenizer、测量窗口、指标定义及成功 / 失败请求的统计资格。</p></details>
+</section>
+<section id="cohorts"><h2>负载与性能分组</h2><p class="muted">Metrics 已保存的最终 Turn 分组。成功请求按 request start 纳入所选窗口；总数包含该窗口内失败与取消请求。输入/输出只使用服务端 usage，system 使用本地估算。自由筛选请求表不会改变这里的统计。</p>
+<div class="controls"><label>分组<select id="axis"><option value="input_tokens">输入 tokens</option><option value="output_tokens">输出 tokens</option><option value="system_tokens_estimate">System tokens（估算）</option><option value="cache">缓存状态</option><option value="input_tokens,output_tokens">输入 × 输出</option><option value="input_tokens,cache">输入 × 缓存</option></select></label><label>指标<select id="metric"><option>ttft</option><option>tpot</option><option>e2e</option></select></label><label>统计量<select id="stat"><option>p95</option><option>p50</option><option>p99</option><option>am</option></select></label></div>
+<div id="chart" class="chart"></div><div id="groups" class="table-wrap"></div></section>
+<section id="timeline"><h2>已保存的趋势</h2><div id="timeline-table" class="table-wrap"></div></section>
+<section id="requests"><h2>请求详情</h2><p>完整请求与全部 Attempt 保存在结果数据库中；此 HTML 不嵌入请求明细。</p><p>结果数据库：<code>{{ database }}</code></p><p>使用 <code>perf-benchmark results serve --root 数据库所在目录</code> 查看结果服务启动方法，再通过结果页面或 <code>perf-benchmark tui --url 服务地址</code> 按需分页查看。本报告不会自动启动服务。</p></section>
+<section id="evidence"><h2>同期服务与 GPU 证据</h2><p id="time-range"></p><div id="targets"></div><div id="external-links"></div><p class="note">服务 /metrics 与 DCGM 属于外部诊断证据。共享服务可能包含其他流量；Run 标签表示关联，不表示独占。未查询外部系统时，版本和数据覆盖情况为未验证。DCGM 基础遥测以 5 秒粒度采集，不能解释单请求的 GPU 内部时间线。</p><p>请求 Trace 保留 W3C 关联，但采样或引擎未开启 tracing 时可能没有 Span。Nsight 原始报告由环境所有者维护，应联合来源 Run、诊断 Run、采集 ID、节点/GPU 与时间窗进行核对。本报告不自动判定根因。</p></section>
+</main>
+<script>
+'use strict';
+function initializeReport(){
+ const $=id=>document.getElementById(id), records=[];
+ document.querySelectorAll('.result-page').forEach(node=>{records.push(...JSON.parse(node.textContent));node.remove()});
+ const trials=records.filter(r=>r.kind==='trial').sort((a,b)=>a.ordinal-b.ordinal), run=records.find(r=>r.kind==='run');
+ const fmt=v=>v===null||v===undefined?'未知':typeof v==='number'?Number(v.toPrecision(6)).toLocaleString('en-US'):String(v);
+ const metricValue=p=>p.value==null?p.value:fmt(p.value)+(p.availability==='partial'?'*':'');
+ const text=(tag,value,parent)=>{const el=document.createElement(tag);el.textContent=value;parent?.append(el);return el};
+ function table(container,heads,rows){const target=$(container);target.replaceChildren();const t=document.createElement('table');const h=t.createTHead().insertRow();heads.forEach(v=>text('th',v,h));const body=t.createTBody();rows.forEach(row=>{const tr=body.insertRow();row.forEach(v=>{const td=tr.insertCell();if(v instanceof Node)td.append(v);else td.textContent=fmt(v)})});target.append(t);if(!rows.length)text('p','此条件下没有可用记录',target).className='empty'}
+ function options(id,values){$(id).replaceChildren();values.forEach(([value,label])=>{const option=text('option',label,$(id));option.value=value})}
+ const sweeps=records.filter(r=>r.kind==='sweep').sort((a,b)=>a.sequence-b.sequence), final=sweeps.at(-1);
+ $('capacity-summary').textContent=final?`${final.axis}: ${final.status}；观测通过点 ${fmt(final.lower)}；观测失败点 ${fmt(final.upper)}；停止原因 ${final.reason??'未知'}。只有 boundary_confirmed 表示区间边界已复测确认；unstable 表示存在冲突证据，不能据此确认容量。边界之间及未验证范围不能视为已确认容量。`:'本次 Run 没有容量搜索记录。';
+ table('capacity-validity',['负载点','阶段','Trial','执行状态','有效性','原因'],sweeps.flatMap(r=>r.validity.map(v=>[r.value,r.phase,v.trial_id,v.execution_status,v.status,v.reasons.join('; ')])));
+ table('capacity-slo',['负载点','Trial','指标','规则','观测值','SLO','原因'],sweeps.flatMap(r=>r.checks.map(c=>[r.value,c.trial_id,`${c.rule.metric}.${c.rule.statistic}`,`${c.rule.op} ${c.rule.original}`,c.value,c.status,c.reason])));
+ options('trial',trials.map(r=>[r.id,`${r.ordinal} · ${r.name} · ${r.status}`]));
+ const summary=$('summary');[['Run 状态',run?.status??'未知'],['Turn',trials.reduce((n,t)=>n+t.turn_count,0)],['Trial',trials.length]].forEach(([label,value])=>{const d=text('div','',summary);text('small',label,d);text('strong',fmt(value),d)});
+ table('run-metrics',['范围','身份','指标','统计量','值','单位','缺失原因'],records.filter(r=>r.kind==='point'&&r.scope!=='trial').map(p=>[p.scope,p.scope_id,p.metric,p.statistic,metricValue(p),p.unit,p.unavailable_reason]));
+ function windows(){options('window',records.filter(r=>r.kind==='window'&&r.scope==='trial'&&r.scope_id===$('trial').value&&!r.window.startsWith('timeline:')).map(r=>[r.window,r.window]));refresh()}
+ function refresh(){const trial=trials.find(t=>t.id===$('trial').value);
+ $('coverage').textContent=trial?`当前 Trial：${trial.turn_count} Turn；成功 ${trial.succeeded_turns}，失败或取消 ${trial.failed_or_cancelled_turns}。指标有效/预期样本见下表；请求详情保存在数据库中。`:'没有 Trial 结果';
+ table('timeline-table',['窗口','指标','统计量','值','单位','原因'],records.filter(r=>r.kind==='point'&&r.scope_id===$('trial').value&&r.window.startsWith('timeline:')).map(r=>[r.window,r.metric,r.statistic,metricValue(r),r.unit,r.unavailable_reason]));
+ const win=records.find(r=>r.kind==='window'&&r.scope_id===$('trial').value&&r.window===$('window').value);
+ $('window-description').textContent=win?`${win.window} · ${win.availability} · duration ${fmt(win.duration_s)} s · ${win.unavailable_reason??''}`:'窗口不可用';
+ const points=records.filter(r=>r.kind==='point'&&r.scope==='trial'&&r.scope_id===$('trial').value&&r.window===$('window').value);
+ table('formal',['指标','统计量','值','单位','有效 / 预期样本','数据来源 / 缺失原因'],points.map(p=>[p.metric,p.statistic,metricValue(p),p.unit,`${fmt(p.valid_sample_count)} / ${fmt(p.expected_sample_count)}`,p.unavailable_reason??p.source]));
+ cohorts();}
+ function cohorts(){const groups=records.filter(r=>r.kind==='group'&&r.trial_id===$('trial').value&&r.window===$('window').value&&r.metric===$('metric').value&&r.dimensions.map(d=>d[0]).join(',')===$('axis').value);const stat=$('stat').value;
+ groups.sort((a,b)=>a.dimensions.map(d=>d[1]).join(' / ').localeCompare(b.dimensions.map(d=>d[1]).join(' / '),undefined,{numeric:true}));
+ const chart=$('chart');chart.replaceChildren();const maximum=Math.max(0,...groups.map(g=>g.statistics[stat]??0));
+ groups.forEach(g=>{const row=text('div','',chart);row.className='bar-row';text('span',g.dimensions.map(d=>d[1]).join(' × '),row).className='bar-label';const area=text('div','',row),bar=text('div','',area);bar.className='bar';bar.hidden=g.statistics[stat]==null;bar.style.width=`${maximum&&g.statistics[stat]!==null?Math.max(0,g.statistics[stat]/maximum*100):0}%`;text('span',`${fmt(g.statistics[stat])} ${g.unit}`,row)});
+ if(!groups.length)text('p','该窗口没有分组结果；请检查窗口可用性或 Metrics Plugin 能力。',chart);
+ table('groups',['分组','总数','成功资格','有效样本',stat,'单位','缺失原因（样本数）'],groups.map(g=>[g.dimensions.map(d=>d[1]).join(' × '),g.sample_count,g.eligible_sample_count,g.valid_sample_count,g.statistics[stat],g.unit,Object.entries(g.unavailable_reasons).map(([k,v])=>`${k}: ${v}`).join('; ')]));}
+ $('trial').onchange=windows;$('window').onchange=refresh;
+ ['axis','metric','stat'].forEach(id=>$(id).onchange=cohorts);
+ $('time-range').textContent=`Run UTC：${run?.started_at??'未知'} → ${run?.finished_at??'未知'}。外部时钟需同步；请核对采集覆盖和时钟偏差。`;
+ const observation=records.find(r=>r.kind==='observation');
+ if(observation){Object.entries(observation.targets).forEach(([kind,targets])=>{text('h3',kind,$('targets'));targets.forEach(t=>text('p',`${t.service_name} · ${t.address} · engine ${t.engine||'未知'} · model ${t.model||'未知'} · 配置版本 ${t.version||'未知'} / 实际版本和数据覆盖未验证`,$('targets')));if(!targets.length)text('p','未配置目标',$('targets'))})}else text('p','未保存 Observation 目标；离线请求分析可正常使用。',$('targets'));
+ const base=document.querySelector('main').dataset.grafana;
+ if(base){const link=text('a','打开 Grafana：核对同期证据',$('external-links'));const url=new URL(base+'/d/perf-run');url.searchParams.set('var-run',document.querySelector('main').dataset.run);if(run?.started_at)url.searchParams.set('from',String(Date.parse(run.started_at)));if(run?.finished_at)url.searchParams.set('to',String(Date.parse(run.finished_at)));link.href=url.toString();link.target='_blank';link.rel='noopener noreferrer'}else text('p','未配置 Grafana 地址。报告本身无需网络；外部链接需连接相应服务。',$('external-links'));
+ windows();
+}
+</script>

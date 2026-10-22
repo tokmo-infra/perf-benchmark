@@ -1,0 +1,12 @@
+[package]
+name = "perf-trace-inflate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crossbeam-channel = "0.5"
+pyo3.workspace = true
+rand = "0.8"
+serde_json.workspace = true
+tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"] }

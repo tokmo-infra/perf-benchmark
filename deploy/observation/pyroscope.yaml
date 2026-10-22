@@ -1,0 +1,16 @@
+target: all
+server:
+  http_listen_port: 4040
+  grpc_listen_port: 9097
+analytics:
+  reporting_enabled: false
+self_profiling:
+  disable_push: true
+limits:
+  retention_period: 168h
+memberlist:
+  bind_port: 7949
+metastore:
+  address: 127.0.0.1:9097
+query_backend:
+  address: 127.0.0.1:9097

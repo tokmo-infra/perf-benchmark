@@ -1,0 +1,46 @@
+# 静态负载示例：固定并发的单轮请求；小样本只用于检查流程。
+# 运行前填写实际服务、served model、匹配的 tokenizer 和新的 SQLite 路径。
+# 默认最多生成4,096 token并保留自然 EOS；exporter: {} 导出终端摘要和 Excel。
+# 默认 Excel：debug/results/source-only-001-tables/results.xlsx，相对路径以本 YAML 所在目录为基准。
+name: source-only-openai
+case: 静态单轮固定并发性能测试
+seed: 42
+pipeline:
+  loader:
+    plugin: hf-datasets
+    settings:
+      dataset: json
+      data_files: data/sharegpt.jsonl
+      split: train
+  normalization:
+    plugin: sharegpt
+    settings:
+      tokenizer_path: /absolute/path/to/model-tokenizer
+      multi_turn: false
+  selector:
+    plugin: all
+    settings: {}
+  executor:
+    plugin: openai-chat
+    settings:
+      base_url: http://127.0.0.1:30000
+      model: replace-with-served-model-name
+      stream: true
+      timeout_seconds: 300
+      extra_body:
+        temperature: 0.1
+  scheduler:
+    plugin: single-turn-closed-loop
+    settings:
+      max_concurrency: 2
+      stop:
+        session_count: 8
+      on_exhausted: cycle
+  metrics:
+    plugin: standard
+    settings: {}
+  saver:
+    plugin: sqlite
+    settings:
+      path: debug/results/source-only-001.db
+  exporter: {}

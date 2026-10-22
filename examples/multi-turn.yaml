@@ -1,0 +1,57 @@
+# 多轮示例：按数据集记录的上下文回放，每个会话内串行执行全部轮次。
+# 活跃用户数和请求并发分别配置；小样本只用于检查流程。
+# live_continuation: true 可让下一轮使用模型实际生成的回复。
+# 运行前填写实际服务、模型、匹配的 tokenizer 和新的数据库名。
+# 默认最多生成4,096 token并保留自然 EOS；exporter: {} 导出终端摘要和 Excel。
+# Excel：results/performance.xlsx，与静态示例共用；相对路径以本 YAML 所在目录为基准。
+name: multi-turn
+case: 多轮完整会话吞吐与缓存性能测试
+seed: 42
+logging:
+  level: INFO
+  progress_interval_seconds: 30
+pipeline:
+  loader:
+    plugin: hf-datasets
+    settings:
+      dataset: json
+      data_files: data/sharegpt.jsonl
+      split: train
+  normalization:
+    plugin: sharegpt
+    settings:
+      tokenizer_path: /absolute/path/to/model-tokenizer
+      multi_turn: true
+      live_continuation: false
+  selector:
+    plugin: all
+    settings: {}
+  executor:
+    plugin: openai-chat
+    settings:
+      base_url: http://127.0.0.1:30000
+      model: replace-with-served-model-name
+      stream: true
+      timeout_seconds: 300
+      extra_body:
+        temperature: 0.1
+  scheduler:
+    plugin: multi-turn-closed-loop
+    settings:
+      max_active_sessions: 4
+      max_concurrency: 2
+      stop:
+        session_count: 8
+      on_exhausted: cycle
+  metrics:
+    plugin: standard
+    settings: {}
+  saver:
+    plugin: sqlite
+    settings:
+      path: debug/results/multi-turn-001.db
+  exporter:
+    plugins:
+      - plugin: tabular
+        settings:
+          excel_path: results/performance.xlsx # 与 static-benchmark.yaml 共用，按子表追加。

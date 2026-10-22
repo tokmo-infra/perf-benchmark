@@ -1,0 +1,380 @@
+{
+  "uid": "perf-runs",
+  "title": "性能测试 / Runs",
+  "schemaVersion": 40,
+  "version": 1,
+  "tags": [
+    "perf-benchmark",
+    "Run"
+  ],
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "search",
+        "label": "名称或 Run ID",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "status",
+        "label": "状态",
+        "type": "custom",
+        "query": "all,pending,preparing,running,succeeded,failed,cancelled",
+        "current": {
+          "text": "all",
+          "value": "all"
+        },
+        "hide": 0,
+        "multi": false
+      },
+      {
+        "name": "page",
+        "label": "页码",
+        "type": "textbox",
+        "query": "1",
+        "current": {
+          "text": "1",
+          "value": "1"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Runs · SQLite 结果目录",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 13
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "无可用数据"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "run_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "名称"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "打开",
+                    "url": "${__data.fields.run_url:raw}&timezone=${__timezone}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "benchmark-results"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "benchmark-results"
+          },
+          "type": "json",
+          "source": "url",
+          "parser": "backend",
+          "format": "table",
+          "url": "http://results:8088/api/runs",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "search",
+                "value": "${search}"
+              },
+              {
+                "key": "status",
+                "value": "${status}"
+              },
+              {
+                "key": "page",
+                "value": "${page}"
+              }
+            ]
+          },
+          "root_selector": "$.items",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "名称",
+              "type": "string"
+            },
+            {
+              "selector": "id",
+              "text": "Run ID",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "状态",
+              "type": "string"
+            },
+            {
+              "selector": "start_ms",
+              "text": "开始",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "duration_s",
+              "text": "时长 (s)",
+              "type": "number"
+            },
+            {
+              "selector": "trend_status",
+              "text": "诊断趋势",
+              "type": "string"
+            },
+            {
+              "selector": "run_url",
+              "text": "run_url",
+              "type": "string"
+            }
+          ],
+          "pagination_mode": "none"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "名称": 0,
+              "Run ID": 1,
+              "状态": 2,
+              "开始": 3,
+              "时长 (s)": 4,
+              "诊断趋势": 5,
+              "run_url": 6
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "每页 50 个 Run · 用页码切换",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 3
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "无可用数据"
+        },
+        "overrides": []
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "benchmark-results"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "benchmark-results"
+          },
+          "type": "json",
+          "source": "url",
+          "parser": "backend",
+          "format": "table",
+          "url": "http://results:8088/api/runs",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "search",
+                "value": "${search}"
+              },
+              {
+                "key": "status",
+                "value": "${status}"
+              },
+              {
+                "key": "page",
+                "value": "${page}"
+              }
+            ]
+          },
+          "root_selector": "$map([$],function($r){{\"total\":$r.total,\"page\":$r.page}})",
+          "columns": [
+            {
+              "selector": "total",
+              "text": "Run 总数",
+              "type": "number"
+            },
+            {
+              "selector": "page",
+              "text": "当前页",
+              "type": "number"
+            }
+          ],
+          "pagination_mode": "none"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "Run 总数": 0,
+              "当前页": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "未能读取的结果文件",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 4
+      },
+      "description": "不兼容、损坏或写入尚未完成的文件不隐藏其他 Run。",
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "无可用数据"
+        },
+        "overrides": []
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "benchmark-results"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "benchmark-results"
+          },
+          "type": "json",
+          "source": "url",
+          "parser": "backend",
+          "format": "table",
+          "url": "http://results:8088/api/runs",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "search",
+                "value": "${search}"
+              },
+              {
+                "key": "status",
+                "value": "${status}"
+              },
+              {
+                "key": "page",
+                "value": "${page}"
+              }
+            ]
+          },
+          "root_selector": "$.errors",
+          "columns": [
+            {
+              "selector": "file",
+              "text": "文件",
+              "type": "string"
+            },
+            {
+              "selector": "error",
+              "text": "读取状态",
+              "type": "string"
+            }
+          ],
+          "pagination_mode": "none"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "文件": 0,
+              "读取状态": 1
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "links": [],
+  "annotations": {
+    "list": []
+  }
+}

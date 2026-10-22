@@ -1,0 +1,5 @@
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+# Alloy owns scraping and forwards samples/exemplars through remote_write.
+scrape_configs: []

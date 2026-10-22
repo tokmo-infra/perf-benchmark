@@ -1,0 +1,64 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+/results/
+/result/
+/datasets/
+# Generated benchmark artifacts stay local.
+/benchmarks/reports/
+# External model and corpus assets are prepared locally, not versioned.
+/repository/tokenizer/
+/repository/datasets/*
+!/repository/datasets/README.md
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.DS_Store
+.idea/
+.agent/
+.scratch/
+archify/
+.agents/**/*.html
+.agents/**/*.json
+/.zvec-grep/
+/.codex/environments/
+/frontend/node_modules/
+/frontend/test-results/
+/frontend/playwright-report/
+/perf_benchmark/app/workbench/
+
+# Rust build outputs
+/perf_benchmark/target/
+
+# Native Python extension built by maturin
+/perf_benchmark/_native*.so
+/perf_benchmark/_native*.pyd
+
+# Local workload and performance artifacts
+/outputs/
+/examples/datasets/
+/examples/debug/
+/examples/scenarios/debug/
+/deploy/results/
+/deploy/observation/logs/
+/deploy/observation/prototype/
+/deploy/.env
+/deploy/gpu/remote.local.yaml
+/deploy/gpu/*.deb

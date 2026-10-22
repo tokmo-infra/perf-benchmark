@@ -1,0 +1,47 @@
+# 各测试点复用原生执行器、计时、指标和 SQLite/Parquet；默认仅一份合并 Excel。
+# 先缩小矩阵验证接口、上下文及 KV 容量，再增加长度/并发和独立重复次数。
+name: static-prefill-decode-benchmark
+case: Prefill输入长度与Decode并发性能矩阵
+service:
+  base_url: http://127.0.0.1:8000/v1
+  model: replace-with-served-model-name
+  api_key: EMPTY
+  timeout_seconds: 600
+  stream: true
+  # 两种模式均需本地 fast tokenizer 及 chat template；相对路径按 YAML 目录解析。
+  tokenizer_path: /absolute/path/to/model-tokenizer
+  endpoint: /chat/completions
+  extra_body: {} # 可加 top_p、chat_template_kwargs 等，阶段参数在下方设置。
+  extra_headers: {}
+  cache_salt_enabled: false # 引擎明确支持时启用；随机输入本身不保证零缓存命中。
+  capacity_snapshot: null # 引擎未暴露完整 KV 几何时，可引用部署端实测 token 容量 JSON。
+output:
+  excel_path: results/performance.xlsx # 与 multi-turn.yaml 共用工作簿，Prefill/Decode 分表追加。
+  json_path: null
+prefill:
+  enabled: true
+  rounds: 3 # 连续闭环请求配额轮次，至少三轮；不是独立冷启动或清缓存轮次。
+  max_tokens: 1
+  temperature: 0.1
+  seed: 42
+  randomize_per_request: true
+  requests_per_concurrency: null # 每轮请求数，默认等于并发；总请求=轮数×每轮请求数。
+  # 输入长度包含本地 chat template 和 generation prompt。
+  matrix:
+    128: [1, 2, 4, 8, 16, 32, 64]
+    512: [1, 2, 4, 8, 16, 32, 64]
+    2048: [1, 2, 4, 8, 16, 32, 64]
+    8192: [1, 2, 4, 8, 16, 32, 64]
+    32768: [1, 2, 4, 8, 16]
+    131072: [1, 2, 4]
+    524288: [1]
+decode:
+  enabled: true
+  rounds: 3
+  concurrencies: [1, 2, 4, 8, 16, 32, 64]
+  max_tokens: 2560
+  ignore_eos: false
+  temperature: 0.1
+  reasoning_effort: high # 固定发送该值；服务不支持时显式设 null。
+  requests_per_concurrency: null
+  prompts: null # 默认八个复杂编码问题；可替换为非空字符串列表。

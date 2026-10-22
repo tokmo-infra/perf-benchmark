@@ -1,0 +1,14 @@
+*
+!Dockerfile
+!config.alloy
+!tempo.yaml
+!prometheus.yaml
+!loki.yaml
+!pyroscope.yaml
+!datasources.yaml
+!dashboards.yaml
+!overview.json
+!runs.json
+!supervisord.conf
+!start.sh
+!health.py

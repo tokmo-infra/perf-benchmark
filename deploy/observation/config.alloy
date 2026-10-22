@@ -1,0 +1,160 @@
+logging {
+  level  = "info"
+  format = "json"
+}
+
+// Per-observer files are atomically published after readiness, removed on shutdown.
+discovery.file "benchmark" {
+  files            = ["/etc/alloy/targets/*.benchmark.json"]
+  refresh_interval = "1s"
+}
+
+// Pull metrics in their native format; preserve each engine's names and labels.
+prometheus.scrape "benchmark" {
+  targets         = discovery.file.benchmark.targets
+  job_name        = "perf-benchmark"
+  scrape_interval = "2s"
+  scrape_timeout  = "1s"
+  forward_to      = [prometheus.remote_write.local.receiver]
+}
+
+discovery.file "engines" {
+  files            = ["/etc/alloy/targets/*.engines.json"]
+  refresh_interval = "5s"
+}
+
+prometheus.scrape "engines" {
+  targets         = discovery.file.engines.targets
+  job_name        = "inference"
+  scrape_interval = "5s"
+  scrape_timeout  = "3s"
+  forward_to      = [prometheus.remote_write.local.receiver]
+}
+
+discovery.file "gpu" {
+  files            = ["/etc/alloy/targets/*.gpu.json"]
+  refresh_interval = "5s"
+}
+
+prometheus.scrape "gpu" {
+  targets         = discovery.file.gpu.targets
+  job_name        = "gpu"
+  scrape_interval = "5s"
+  scrape_timeout  = "3s"
+  forward_to      = [prometheus.remote_write.local.receiver]
+}
+
+prometheus.scrape "platform" {
+  targets = [
+    { "__address__" = "127.0.0.1:12345", "service_name" = "alloy" },
+    { "__address__" = "127.0.0.1:9090", "service_name" = "prometheus" },
+    { "__address__" = "127.0.0.1:3200", "service_name" = "tempo" },
+    { "__address__" = "127.0.0.1:3100", "service_name" = "loki" },
+    { "__address__" = "127.0.0.1:4040", "service_name" = "pyroscope" },
+  ]
+  job_name        = "observation-platform"
+  scrape_interval = "5s"
+  scrape_timeout  = "3s"
+  forward_to      = [prometheus.remote_write.local.receiver]
+}
+
+prometheus.remote_write "local" {
+  endpoint {
+    url            = "http://127.0.0.1:9090/api/v1/write"
+    send_exemplars = true
+    queue_config {
+      batch_send_deadline = "1s"
+    }
+  }
+}
+
+// Client traces and optional structured OTLP logs share bounded collection.
+// Inference-server span instrumentation is deliberately outside this deployment step.
+otelcol.receiver.otlp "local" {
+  grpc { endpoint = "0.0.0.0:4317" }
+  http { endpoint = "0.0.0.0:4318" }
+  output {
+    traces = [otelcol.processor.memory_limiter.local.input]
+    logs   = [otelcol.processor.memory_limiter.local.input]
+  }
+}
+
+otelcol.processor.memory_limiter "local" {
+  check_interval = "1s"
+  limit          = "256MiB"
+  spike_limit    = "64MiB"
+  output {
+    traces = [otelcol.processor.batch.local.input]
+    logs   = [otelcol.processor.batch.local.input]
+  }
+}
+
+otelcol.processor.batch "local" {
+  timeout             = "1s"
+  send_batch_size      = 256
+  send_batch_max_size  = 256
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+    logs   = [otelcol.exporter.otlphttp.loki.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "127.0.0.1:14317"
+    tls { insecure = true }
+  }
+  sending_queue {
+    queue_size    = 128
+    num_consumers = 2
+  }
+  retry_on_failure { max_elapsed_time = "30s" }
+}
+
+otelcol.exporter.otlphttp "loki" {
+  client { endpoint = "http://127.0.0.1:3100/otlp" }
+  sending_queue { queue_size = 128 }
+  retry_on_failure { max_elapsed_time = "30s" }
+}
+
+local.file_match "benchmark_logs" {
+  path_targets = [{ "__path__" = "/var/log/perf-benchmark/*.log", "service_name" = "perf-benchmark" }]
+  sync_period  = "5s"
+}
+
+loki.source.file "benchmark" {
+  targets    = local.file_match.benchmark_logs.targets
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint { url = "http://127.0.0.1:3100/loki/api/v1/push" }
+}
+
+// Self-profiling proves the profile path without instrumenting benchmark execution.
+pyroscope.scrape "platform" {
+  targets    = [{ "__address__" = "127.0.0.1:12345", "service_name" = "alloy" }]
+  forward_to = [pyroscope.write.local.receiver]
+}
+
+discovery.file "profiles" {
+  files            = ["/etc/alloy/targets/*.profiles.json"]
+  refresh_interval = "5s"
+}
+
+pyroscope.scrape "applications" {
+  targets    = discovery.file.profiles.targets
+  forward_to = [pyroscope.write.local.receiver]
+}
+
+pyroscope.receive_http "applications" {
+  http {
+    listen_address = "0.0.0.0"
+    listen_port    = 9999
+  }
+  forward_to = [pyroscope.write.local.receiver]
+}
+
+pyroscope.write "local" {
+  endpoint { url = "http://127.0.0.1:4040" }
+}

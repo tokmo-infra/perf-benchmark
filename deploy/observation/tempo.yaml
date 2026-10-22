@@ -1,0 +1,27 @@
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 127.0.0.1:14317
+        http:
+          endpoint: 127.0.0.1:14318
+ingester:
+  max_block_duration: 5m
+compactor:
+  compaction:
+    block_retention: 168h
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /data/tempo/wal
+    local:
+      path: /data/tempo/blocks
+usage_report:
+  reporting_enabled: false
+memberlist:
+  bind_port: 7947

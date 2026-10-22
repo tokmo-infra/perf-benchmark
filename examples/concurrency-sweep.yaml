@@ -1,0 +1,58 @@
+# 动态并发示例：依次测试 1、2、4 并发，并按 SLO 判断各档是否通过。
+# 小样本只检查流程；正式压测换成自己的数据集，并增加 session_count 和 min_samples。
+# 运行前填写实际服务、模型、匹配的 tokenizer 和新的数据库名。
+# 默认最多生成4,096 token并保留自然 EOS；exporter: {} 导出终端摘要和 Excel。
+# 默认 Excel：debug/results/concurrency-sweep-001-tables/results.xlsx，相对路径以本 YAML 所在目录为基准。
+name: concurrency-sweep
+case: 1、2、4并发吞吐与延迟对照
+seed: 42
+pipeline:
+  loader:
+    plugin: hf-datasets
+    settings:
+      dataset: json
+      data_files: data/sharegpt.jsonl
+      split: train
+  normalization:
+    plugin: sharegpt
+    settings:
+      tokenizer_path: /absolute/path/to/model-tokenizer
+      multi_turn: false
+  selector:
+    plugin: all
+    settings: {}
+  executor:
+    plugin: openai-chat
+    settings:
+      base_url: http://127.0.0.1:30000
+      model: replace-with-served-model-name
+      stream: true
+      timeout_seconds: 300
+      extra_body:
+        temperature: 0.1
+  scheduler:
+    plugin: single-turn-closed-loop
+    settings:
+      sweep:
+        axis: max_concurrency
+        values: [1, 2, 4]
+        slo:
+          window: overall
+          min_samples: 2
+          rules:
+            - {metric: ttft, statistic: am, op: le, value: 1s}
+            - {metric: ttft, statistic: p90, op: le, value: 2s}
+            - {metric: decode_throughput, statistic: min, op: ge, value: 20tok/s}
+            - {metric: success_rate, statistic: value, op: ge, value: 0.99}
+      stop:
+        session_count: 8
+      on_exhausted: cycle
+      repetitions: 1
+  metrics:
+    plugin: standard
+    settings: {}
+  saver:
+    plugin: sqlite
+    settings:
+      path: debug/results/concurrency-sweep-001.db
+  exporter: {}

@@ -1,0 +1,13 @@
+ssh:
+  host: '192.0.2.10'              # GPU 服务器 SSH IP / hostname
+  port: 22
+  username: 'root'               # 需要直接执行容器命令及写 remote_dir 的权限
+  password: ''                   # 可填写密码；空字符串则运行时隐藏输入
+runtime: nerdctl                 # docker 或 nerdctl
+nerdctl_namespace: default
+remote_dir: /opt/perf-benchmark-gpu
+gpu_bind_ip: '192.0.2.10'         # DCGM 监听地址；可与 SSH/NAT 地址不同
+dcgm_image: 'nvcr.io/nvidia/k8s/dcgm-exporter:<固定兼容版本>'
+inference_image: '<固定版本的Debian或Ubuntu推理镜像>'
+nsight_image: 'inference-nsight:<固定版本>'
+nsight_deb: ./nsight-systems-cli.deb # 本地文件，相对本 YAML 的路径
