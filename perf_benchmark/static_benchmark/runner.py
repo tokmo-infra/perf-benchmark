@@ -26,6 +26,7 @@ class StaticBenchmarkRunner:
             Path(config.output.excel_path).stem + "-facts")
         self._started = False
         self._exported = (0, 0)
+        self.reasoning = None
 
     def _start(self):
         if not self._started:
@@ -51,15 +52,14 @@ class StaticBenchmarkRunner:
             path.write_text(json.dumps([asdict(r) for r in (*self.prefill_results, *self.decode_results)],
                                        ensure_ascii=False, indent=2)+"\n")
 
-    def _pipeline(self, folder, source, concurrency, count, *, prefill):
+    def _executor(self, *, prefill):
         service = self.config.service
         point = self.config.prefill if prefill else self.config.decode
         url = urlsplit(service.normalized_url())
         extra = dict(service.extra_body, temperature=point.temperature)
+        extra['reasoning_effort'] = None if prefill else point.reasoning_effort
         if not prefill:
             extra["ignore_eos"] = point.ignore_eos
-            if point.reasoning_effort is not None:
-                extra["reasoning_effort"] = point.reasoning_effort
         executor = dict(base_url=f"{url.scheme}://{url.netloc}", endpoint=url.path,
                         model=service.model, stream=True, timeout_seconds=service.timeout_seconds,
                         max_tokens=point.max_tokens, extra_body=extra, extra_headers=service.extra_headers,
@@ -68,6 +68,11 @@ class StaticBenchmarkRunner:
             if any(k.lower() == "authorization" for k in service.extra_headers):
                 raise ValueError("api_key conflicts with Authorization extra header")
             executor["extra_headers"] = dict(service.extra_headers, Authorization="Bearer " + service.api_key)
+        return executor
+
+    def _pipeline(self, folder, source, concurrency, count, *, prefill):
+        executor = self._executor(prefill=prefill)
+        service = self.config.service
         return dict(case=self.config.case+" / "+folder.name,
                     name=self.config.name+"-"+folder.name, seed=self.config.prefill.seed,
                     application={"service_capacity": {"snapshot": service.capacity_snapshot}
@@ -117,6 +122,8 @@ class StaticBenchmarkRunner:
             recipe["request_body_hashes"].append(hashlib.sha256(
                 json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest())
         recipe["tokenizer_fingerprint"] = self.sampler.fingerprint
+        if not prefill:
+            recipe['reasoning'] = self.reasoning or {'mode': 'explicit', 'selected': point.reasoning_effort}
         (folder / "workload.json").write_text(json.dumps(recipe, indent=2)+"\n")
         console.print(f"{name}: {point.rounds} rounds × {per_round} requests = {count}, "
                       f"concurrency {concurrency}, continuous native closed loop")
@@ -148,6 +155,9 @@ class StaticBenchmarkRunner:
                 VocabularyTokenSampler, self.config.service.tokenizer_path,
                 base_dir=self.config.config_dir,
                 template_options=self.config.service.extra_body.get("chat_template_kwargs"))
+        # Resolve before the first workbook checkpoint records configuration.
+        if self.config.decode.enabled:
+            await self._resolve_reasoning()
         output = []
         for length, concurrencies in sorted(self.config.prefill.matrix.items()):
             for concurrency in concurrencies:
@@ -159,6 +169,13 @@ class StaticBenchmarkRunner:
                     return output
         return output
 
+    async def _resolve_reasoning(self):
+        if self.config.decode.reasoning_effort == 'auto':
+            from perf_benchmark.app.reasoning import resolve
+            resolved, self.reasoning = await resolve({'pipeline': {'executor': {
+                'plugin': 'openai-chat', 'settings': self._executor(prefill=False)}}})
+            self.config.decode.reasoning_effort = resolved['pipeline']['executor']['settings']['extra_body'].get('reasoning_effort')
+
     async def run_decode_benchmark(self, on_progress=None):
         if not self.config.decode.enabled:
             return []
@@ -167,6 +184,7 @@ class StaticBenchmarkRunner:
                 VocabularyTokenSampler, self.config.service.tokenizer_path,
                 base_dir=self.config.config_dir,
                 template_options=self.config.service.extra_body.get("chat_template_kwargs"))
+        await self._resolve_reasoning()
         output = []
         for concurrency in self.config.decode.concurrencies:
             result = await self._point("decode", concurrency)

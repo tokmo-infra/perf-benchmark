@@ -278,6 +278,12 @@ React 工作台从统一 ResultReader 读取正式指标；前端静态资源由
 源码交付保留 frontend 与 scripts，前端静态资源、依赖、wheel 和原生扩展由使用者在运行环境构建。
 前端验证执行 npm run typecheck、npm test 与 npm run build；需要冻结结果或浏览器的 E2E 单独报告前置条件。
 
+## 思考能力准备
+
+应用入口在正式 Run 创建前为 Chat/Responses 协商默认思考档位，顺序为 max、xhigh、high；协议插件构造最小探测正文，应用层管理有界响应、鉴权、取消和错误分类。明确的思考字段或取值校验错误触发下一档，其他错误停止准备。显式配置优先。全部服务端点共同接受的档位写回配置后，再冻结条件、质量身份与原生运行证据。正式测量期间请求参数保持稳定，原生 Attempt、重试及计时边界沿用已有契约。
+
+静态Decode在首个工作簿checkpoint前完成一次协商，整个矩阵共用选定档位。Prefill保持单token测量配置。探测状态和选定值保存在运行证据或workload.json中，准备请求的用量与费用由部署侧单独观察，正式指标仅聚合原生测试事实。
+
 ## 性能验证工具
 
 大型性能实验、跨工具对比、诊断及真实平台专项测试由完整开发仓库管理。交付包的 `benchmarks/` 保留静态矩阵入口 `static_benchmark.py`，以及存储回归测试所依赖的四份辅助源码：`result_pipeline.py`、`result_storage.py`、`result_diagnostics.py`、`sqlite_parquet_comparison.py`。这四份辅助源码用于构造可复算的小型存储样本，由存储回归测试调用。

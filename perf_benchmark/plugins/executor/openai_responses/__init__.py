@@ -6,6 +6,13 @@ from perf_benchmark.runtime.http.request import HttpRequestPlugin, merge_extra_b
 from perf_benchmark.runtime.http.snapshot_http import http_settings, snapshot_request, trial_settings
 
 
+def reasoning_probe(settings, effort):
+    yield settings['base_url'].rstrip('/') + '/v1/responses', {
+        'model': settings['model'], 'input': 'Reply OK.', 'store': False,
+        'stream': False, 'max_output_tokens': 16, 'reasoning': {'effort': effort},
+    }
+
+
 def parameters(value):
     validate_extra_body(value, owned={"input", "model", "stream", "store", "cache_salt", "cache_salt_enabled"})
     if "max_output_tokens" in value:

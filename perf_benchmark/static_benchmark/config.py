@@ -55,7 +55,7 @@ class DecodeConfig:
     max_tokens: int = 2560
     ignore_eos: bool = False
     temperature: float = 0.1
-    reasoning_effort: str | None = "high"
+    reasoning_effort: str | None = "auto"
     prompts: list | None = None
     requests_per_concurrency: int | None = None
 

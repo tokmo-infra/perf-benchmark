@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-GENERATION_KEYS = frozenset({"temperature", "top_p", "top_k", "seed", "max_tokens", "max_completion_tokens",
+GENERATION_KEYS = frozenset({"reasoning_effort", "reasoning", "temperature", "top_p", "top_k", "seed", "max_tokens", "max_completion_tokens",
                              "max_output_tokens", "ignore_eos", "repetition_penalty", "presence_penalty", "frequency_penalty", "n"})
 
 

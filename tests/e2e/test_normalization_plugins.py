@@ -67,7 +67,7 @@ def _config(
                 "settings": {
                     "base_url": base_url,
                     "model": "mock",
-                    "max_tokens": 3, "extra_body": {},
+                    "max_tokens": 3, "extra_body": {"reasoning_effort": None},
                 },
             },
             "scheduler": scheduler,
