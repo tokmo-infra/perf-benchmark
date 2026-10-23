@@ -30,7 +30,7 @@ NON_CORE = {
         "Prometheus/OTLP conversion, standalone observation consumer and offline Nsight import",
         ("app/observe.py", "integrations/__init__.py", "integrations/observation_export.py",
          "app/nsight.py", "app/results/observation.py", "app/evidence.py", "app/preparation.py",
-         "app/service_capacity.py"),  # Read-only engine metadata; outside measured requests.
+         "app/service_capacity.py", "app/reasoning.py"),  # Capability preparation stays outside measured requests.
     ),
     "hook": (
         "Concrete request-parameters Hook and its package marker",

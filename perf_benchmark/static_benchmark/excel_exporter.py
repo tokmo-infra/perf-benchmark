@@ -52,7 +52,7 @@ def export_benchmark_to_excel(excel_path, config, prefill_results, decode_result
                            meta.get("availability"), meta.get("unavailable_reason")]
     metadata = [("case", config.case), ("任务", config.name), ("模型", config.service.model),
                 ("服务", config.service.base_url), ("分词器", config.service.tokenizer_path),
-                ("思考档位(配置值)", config.decode.reasoning_effort),
+                ("Decode思考档位(请求值)", config.decode.reasoning_effort),
                 ("Decode输出上限", config.decode.max_tokens), ("自然EOS", not config.decode.ignore_eos),
                 ("统计", "原生StandardMetrics；空白为缺失，详见指标可用性"),
                 ("批次吞吐", "原生workload_prompt/workload_completion，包含排队和TTFT"),

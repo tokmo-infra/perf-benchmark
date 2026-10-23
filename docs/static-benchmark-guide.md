@@ -18,7 +18,8 @@ uv run perf-benchmark static examples/static-benchmark.yaml --only-decode --outp
 ## 负载
 
 - Prefill：从非特殊 token 随机生成文本，并用本地 **chat template（包含 generation prompt）** 校准目标长度。无法精确构造时停止并说明原因。默认每个测试点、每个请求采用不同的确定性序列，减少重复前缀；共享模板仍可能命中缓存，因此实际缓存命中以服务 usage 为准。引擎支持 `cache_salt` 时可显式开启 `service.cache_salt_enabled`。
-- Decode：默认轮换八个复杂编码问题，也可通过 `decode.prompts` 指定列表。固定发送配置的 `reasoning_effort`；不支持的服务可设为 `null`。输出遵循 `max_tokens` 和 `ignore_eos`。HTTP 错误保留为失败，不自动换思考档位或改变负载重试。
+- Decode：默认轮换八个复杂编码问题，也可通过 `decode.prompts` 指定列表。`reasoning_effort: auto` 为默认设置，在正式测试前依次探测 `max`、`xhigh`、`high`，选择服务接受的最高档位并固定整个矩阵的请求值。服务明确拒绝当前思考档位时继续下一档；鉴权、限流、连接和其他请求错误立即报告。三档均被拒绝时停止准备。显式字符串固定发送该值，`null` 使用服务端设置。输出遵循 `max_tokens` 和 `ignore_eos`，正式请求错误沿用原生失败事实。
+- 思考能力探测使用独立短请求，可能产生少量服务用量；性能统计及计费仅包含正式测试请求。`workload.json` 保存选择结果和探测状态，Excel配置记录实际请求档位。服务接受参数表示协议校验通过，模型实际执行效果由服务实现决定。Prefill保持其单token测量设置。
 - Prefill和Decode默认均使用 `temperature: 0.1`；阶段内显式温度优先，包含0。Prefill的1 token及Decode的2560 token默认上限分别保持，温度不替代限长。
 - 每点默认 `rounds: 3`，至少三轮请求配额，连续闭环执行。总请求数为 `rounds × (requests_per_concurrency 或并发数)`。每轮配额必须大于等于所选并发。它们共用一个原生Run/Trial，全部请求一起计算统计量，分位数不按轮平均；轮次没有独立清缓存或重启服务。需要独立实验时另开输出目录重复运行。
 - 并发1默认仍只有3条请求，P99仅供观察；Excel列出TTFT和速度各自的有效样本数。可增大 `requests_per_concurrency`；100条只提供约1%的经验分位分辨率，不保证尾延迟稳定。默认矩阵含很长的输入，应按模型上下文和KV容量缩小矩阵后再运行。

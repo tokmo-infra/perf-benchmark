@@ -136,14 +136,6 @@ async def execute_config(config, base_dir, cancellation=None, live_display=None)
     application = config.get("application", {})
     if set(application) - {"conditions", "quality", "preparation", "service_capacity"}:
         raise ValueError("unknown application setting")
-    evidence = await asyncio.to_thread(conditions, config, application.get("conditions", {}), base_dir)
-    evidence["case"] = case
-    evidence["quality"] = await asyncio.to_thread(quality, application.get("quality", {}), config, base_dir)
-    from perf_benchmark.app.service_capacity import collect
-    evidence["service_capacity"] = await collect(config, application.get("service_capacity", {}), base_dir)
-    prepare = ServicePreparation(application["preparation"], config["pipeline"]["executor"]) if "preparation" in application else None
-    if prepare is not None or "quality" in application or evidence["quality"]["status"] == "not_applicable":
-        prepare = ApplicationPreparation(prepare, evidence["quality"])
     token = cancellation or CancellationToken()
     loop = asyncio.get_running_loop()
     previous = {}
@@ -154,6 +146,18 @@ async def execute_config(config, base_dir, cancellation=None, live_display=None)
         else:
             loop.add_signal_handler(sig, token.cancel, "user_cancelled")
     try:
+        from perf_benchmark.app.reasoning import resolve
+        config, reasoning = await resolve(config, token)
+        evidence = await asyncio.to_thread(conditions, config, application.get("conditions", {}), base_dir)
+        evidence["case"] = case
+        if reasoning is not None:
+            evidence["reasoning"] = reasoning
+        evidence["quality"] = await asyncio.to_thread(quality, application.get("quality", {}), config, base_dir)
+        from perf_benchmark.app.service_capacity import collect
+        evidence["service_capacity"] = await collect(config, application.get("service_capacity", {}), base_dir)
+        prepare = ServicePreparation(application["preparation"], config["pipeline"]["executor"]) if "preparation" in application else None
+        if prepare is not None or "quality" in application or evidence["quality"]["status"] == "not_applicable":
+            prepare = ApplicationPreparation(prepare, evidence["quality"])
         return await Coordinator().execute(config, base_dir=base_dir, cancellation=token, evidence=evidence,
                                            preparation=prepare, live_display=live_display)
     finally:

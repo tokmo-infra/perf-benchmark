@@ -34,6 +34,7 @@ tests/test_service_capacity.py -export-ignore
 tests/saver/test_compact.py -export-ignore
 tests/conftest.py -export-ignore
 tests/app/test_platform_signals.py -export-ignore
+tests/app/test_reasoning.py -export-ignore
 tests/app/test_experiments.py -export-ignore
 tests/core/test_code_size.py -export-ignore
 tests/core/test_import_boundaries.py -export-ignore

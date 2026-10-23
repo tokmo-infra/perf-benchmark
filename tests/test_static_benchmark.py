@@ -67,10 +67,14 @@ def test_config_rejects_silent_workload_changes(values):
 @pytest.fixture
 async def static_server():
     captured = []
-    mode = {"usage": True, "status": 200}
+    mode = {"usage": True, "status": 200, "supported_efforts": None}
     async def handle(request):
         body = await request.json()
         captured.append(body)
+        if (mode['supported_efforts'] is not None and 'reasoning_effort' in body
+                and body['reasoning_effort'] not in mode['supported_efforts']):
+            return web.json_response({'error': {'message':
+                'unsupported reasoning_effort ' + body['reasoning_effort']}}, status=400)
         if mode["status"] != 200:
             return web.json_response({"error": {"message": "rejected workload"}}, status=mode["status"])
         response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
@@ -123,11 +127,12 @@ async def test_native_static_matrix_persists_facts_and_excludes_role_and_usage_t
     runner = StaticBenchmarkRunner(config)
     prefill, decode = await runner.run_all()
     assert len(prefill) == 2 and len(decode) == 1
-    assert len(captured) == 17
+    assert len(captured) == 18  # One capability request is outside the 17 measured requests.
     assert captured[0]["messages"] != captured[1]["messages"]
     assert all("max_completion_tokens" not in row for row in captured)
-    assert all(row['temperature']==0.1 for row in captured)
-    assert captured[-1]["reasoning_effort"] == "high"
+    assert all(row['temperature']==0.1 for row in captured if row['stream'])
+    assert captured[-1]["reasoning_effort"] == "max"
+    assert runner.reasoning['selected'] == 'max'
     for result in (*prefill, *decode):
         assert result.status == "succeeded"
         assert result.ttft_mean_ms >= 30
@@ -152,6 +157,39 @@ async def test_native_static_matrix_persists_facts_and_excludes_role_and_usage_t
         header = [cell.findtext('x:is/x:t', namespaces=ns)
                   for cell in detail.find('x:sheetData/x:row', ns)]
         assert '可用性' not in header and '缺失原因' in header
+
+
+@pytest.mark.parametrize('effort', ['xhigh', 'high'])
+async def test_static_fallback_is_once_per_matrix_and_records_actual_effort(
+    tmp_path, static_tokenizer, static_server, monkeypatch, effort,
+):
+    from openpyxl import load_workbook
+    monkeypatch.setenv('PERF_BENCHMARK_PREPARATION_WORKERS', '1')
+    url, captured, mode = static_server
+    mode['supported_efforts'] = {effort}
+    config = load_static_benchmark_config({
+        'case': 'default reasoning fallback',
+        'service': {'base_url': url, 'model': 'mock', 'tokenizer_path': str(static_tokenizer)},
+        'prefill': {'enabled': False}, 'decode': {'concurrencies': [1, 2]},
+        'output': {'excel_path': str(tmp_path / 'reasoning.xlsx')},
+    })
+    runner = StaticBenchmarkRunner(config)
+    _, results = await runner.run_all()
+    probes = [r for r in captured if r['stream'] is False]
+    measured = [r for r in captured if r['stream'] is True]
+    assert [p['reasoning_effort'] for p in probes] == (['max', 'xhigh'] if effort == 'xhigh'
+                                                    else ['max', 'xhigh', 'high'])
+    assert len(measured) == sum(r.total_requests for r in results) == 9
+    assert {p['reasoning_effort'] for p in measured} == {effort}
+    for result in results:
+        recipe = json.loads(Path(result.database).with_name('workload.json').read_text())
+        assert recipe['reasoning']['selected'] == effort
+    book = load_workbook(config.output.excel_path)
+    try:
+        values = dict(list(book['测试概览与配置'].values)[1:])
+        assert values['Decode思考档位(请求值)'] == effort
+    finally:
+        book.close()
 
 
 def test_round_quota_and_minimum():
@@ -224,7 +262,7 @@ async def test_missing_usage_remains_unknown_and_failure_cli_returns_nonzero(
     url, _, mode = static_server
     mode["usage"] = False
     values = {'case':'missing usage and HTTP failure',"service": {"base_url": url, "model": "mock", "tokenizer_path": str(static_tokenizer)},
-              "prefill": {"enabled": False}, "decode": {"concurrencies": [1]},
+              "prefill": {"enabled": False}, "decode": {"concurrencies": [1], "reasoning_effort": "high"},
               "output": {"excel_path": str(tmp_path / "unknown.xlsx")}}
     runner = StaticBenchmarkRunner(load_static_benchmark_config(values))
     _, results = await runner.run_all()

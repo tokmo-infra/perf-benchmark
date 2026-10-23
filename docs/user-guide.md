@@ -223,6 +223,21 @@ extra_body:
 执行器自动设置 `ignore_eos: true`；填写 `output_policy: natural` 则保留自然结束行为。
 离线生成命令与配置入口见第 9 节。
 
+### 3.2 默认思考档位
+
+`perf-benchmark run` 的 Chat 与 Responses，以及静态 Decode 测试，默认在正式测量前按 `max → xhigh → high` 协商思考档位。服务明确返回当前思考字段或取值校验错误时，依次尝试下一档；鉴权、限流、超时、连接及其他错误直接报告。三档均被拒绝时停止准备。多个 Chat 服务地址共同选择全部端点接受的最高档位。
+
+准备探测使用独立短请求，可能产生少量服务用量；正式统计和计费仅包含测试请求。选定档位冻结在运行配置中，运行证据保存各次探测的档位与HTTP状态，Excel的生成参数保存实际选择值。服务接受参数表示协议校验通过，模型执行效果由部署实现决定。正式测量期间沿用已冻结的请求设置和正常失败处理。
+
+Chat在 `executor.settings.extra_body` 中配置 `reasoning_effort`；省略或 `auto` 使用上述顺序。显式字符串（例如 `high`、`low`）固定发送该值，`null` 省略该字段并沿用服务端设置。显式 `thinking`、`enable_thinking` 或 `chat_template_kwargs.enable_thinking` 同样优先。
+
+```yaml
+extra_body:
+  reasoning_effort: auto
+```
+
+Responses使用 `extra_body.reasoning.effort`，同样支持 `auto`、显式字符串及 `null`。静态测试对应 `decode.reasoning_effort`。Embedding、Rerank和Completions继续沿用各自的协议配置。
+
 ## 4. 选择测试方法
 
 下面的 `scheduler` 段替换最小配置中 **`pipeline.scheduler`**，其它 stage 保留。

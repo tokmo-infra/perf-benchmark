@@ -34,6 +34,15 @@ _SETTING_KEYS = {
 }
 
 
+def reasoning_probe(settings, effort):
+    """Minimal protocol capability request, separate from benchmark attempts."""
+    for base in dict.fromkeys(settings.get('base_urls') or [settings['base_url']]):
+        yield base.rstrip('/') + settings['endpoint'], {
+            'model': settings['model'], 'messages': [{'role': 'user', 'content': 'Reply OK.'}],
+            'stream': False, 'max_tokens': 1, 'reasoning_effort': effort,
+        }
+
+
 def validate(settings):
     if not isinstance(settings, dict):
         raise ValueError("executor settings must be an object")

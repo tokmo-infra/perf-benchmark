@@ -26,6 +26,8 @@ uv run perf-benchmark run examples/source-only-openai.yaml
 
 逐记录数据准备默认使用 4 个进程构造请求；需要分词时，批量分词另使用 4 个原生 CPU 线程。分别通过 `PERF_BENCHMARK_PREPARATION_WORKERS` 和 `RAYON_NUM_THREADS` 调整，详见使用指南的“准备与分词并行度”。完整 SWE 回放直接发送录制上下文，长度处理交给服务端。
 
+Chat、Responses及静态Decode测试默认在正式测量前按 `max → xhigh → high` 选择服务接受的思考档位，并固定正式请求参数。显式思考配置优先；`null` 使用服务端设置。选择结果保存在运行证据和生成参数中，探测请求独立于正式性能统计，配置方式见使用指南的“默认思考档位”。
+
 配置里的ShareGPT小样本只用于检查请求流程，正式性能测试替换成自己的数据集。相对路径按YAML所在目录解析；`examples/source-only-openai.yaml` 的 `debug/results/source-only-001.db` 实际落在 `examples/debug/results/source-only-001.db`。
 
 ## 共享数据集与样本数量
