@@ -112,7 +112,7 @@ def _write(path, record):
     path.write_text(json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-async def test_optional_prices_and_dataset_quartiles_are_persisted_without_changing_requests(tmp_path):
+async def test_optional_prices_and_maxtpm_window_are_persisted_without_changing_requests(tmp_path):
     requests = []
     source, database = tmp_path / "prices.jsonl", tmp_path / "prices.db"
     _write(source, {
@@ -150,7 +150,7 @@ async def test_optional_prices_and_dataset_quartiles_are_persisted_without_chang
     assert costs["total_cost"]["unit"] == "CNY"
     assert costs["cost_observed_attempts"]["statistics"]["value"] == 3
     assert throughput["maxtpm"]["availability"] == "unavailable"
-    assert throughput["maxtpm"]["unavailable_reason"] == "no_complete_minute_between_dataset_quartiles"
+    assert throughput["maxtpm"]["unavailable_reason"] == "no_complete_minute_in_maxtpm_window"
     assert throughput["maxtpm_minutes"]["statistics"]["value"] == 0
     assert all("pricing" not in body and "maxtpm" not in body for body in requests)
 

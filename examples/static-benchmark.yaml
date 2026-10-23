@@ -42,6 +42,5 @@ decode:
   max_tokens: 2560
   ignore_eos: false
   temperature: 0.1
-  reasoning_effort: auto # 正式测试前按 max、xhigh、high 选择；null 使用服务端设置。
   requests_per_concurrency: null
   prompts: null # 默认八个复杂编码问题；可替换为非空字符串列表。

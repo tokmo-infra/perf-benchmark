@@ -9,8 +9,9 @@ from perf_benchmark.pipeline.contracts.facts import (
     TrialFact,
     TrialSchedulingFact,
 )
-from perf_benchmark.pipeline.results.measurement import AttemptFact, SessionFact
+from perf_benchmark.pipeline.results.measurement import AttemptFact, OccupancyFact, SessionFact
 from perf_benchmark.plugins.metrics.standard import StandardMetrics, parse_settings
+from perf_benchmark.plugins.metrics.standard.maxtpm import _concurrency_end
 from tests.metrics.test_groups import fact
 
 NANO = 10**9
@@ -39,7 +40,9 @@ def test_pricing_source_is_frozen_metadata_and_keeps_billing_points_identical():
         backend.open()
         try:
             known = turn("known", 20, prompt=100, completion=10, cached=25)
-            backend.consume((session(0, 9999), turn("start", 10, prompt=0, completion=0, cached=0),
+            backend.consume((*occupancy((1, 1)), session(0, 9999),
+                             turn("before", 5, prompt=0, completion=0, cached=0),
+                             turn("start", 10, prompt=0, completion=0, cached=0),
                              AttemptFact(**asdict(known)), known, turn("end", 140)))
             reports.append(backend.finalize_trial(trial(4)))
         finally:
@@ -96,6 +99,126 @@ def by_name(points, window="overall"):
     return {p.metric: p for p in points if p.window == window and p.statistic == "value"}
 
 
+def occupancy(*rows):
+    return tuple(OccupancyFact("trial", "in_flight", stamp * NANO, value) for stamp, value in rows)
+
+
+@pytest.mark.parametrize("rows,start,end,expected,confirmed,reason", [
+    ([(1, 192), (100, 191), (160, 192)], 20, 300, 100, 160, "concurrency_under_target_60s"),
+    ([(1, 192), (100, 191), (159, 192), (200, 191)], 20, 300, 200, 260, "concurrency_under_target_60s"),
+    ([(1, 192), (100, 191), (159, 192)], 20, 300, 300, None, None),
+    ([(1, 192), (200, 191)], 20, 250, 250, None, None),
+    ([(1, 192), (200, 191)], 20, 260, 200, 260, "concurrency_under_target_60s"),
+    ([(1, 191), (300, 192)], 20, 250, 20, 80, "concurrency_under_target_60s"),
+    ([(1, 192), (100, 191), (120, 190)], 20, 300, 100, 160, "concurrency_under_target_60s"),
+    ([(1, 192), (100, 191), (100, 192)], 20, 300, 300, None, None),
+    ([(1, 192), (100, 191), (150, 192), (150, 191)], 20, 300, 100, 160, "concurrency_under_target_60s"),
+    ([(1, 191), (20, 192)], 20, 300, 300, None, None),
+    ([(1, 193), (100, 192)], 20, 300, 300, None, None),
+    ([], 20, 300, None, None, "occupancy_not_observed_at_maxtpm_start"),
+    ([(21, 192)], 20, 300, None, None, "occupancy_not_observed_at_maxtpm_start"),
+])
+def test_maxtpm_concurrency_end_uses_continuous_time_and_exact_target(
+    rows, start, end, expected, confirmed, reason
+):
+    cutoff, confirmation, actual_reason = _concurrency_end(
+        [(stamp * NANO, value) for stamp, value in rows], start * NANO, end * NANO, 192
+    )
+    assert cutoff == (expected * NANO if expected is not None else None)
+    assert confirmation == (confirmed * NANO if confirmed is not None else None)
+    assert actual_reason == reason
+
+
+@pytest.mark.parametrize("target,rows,reason", [
+    (None, ((1, 192),), "target_concurrency_not_configured"),
+    (192, (), "occupancy_not_observed_at_maxtpm_start"),
+    (192, ((21, 192),), "occupancy_not_observed_at_maxtpm_start"),
+])
+def test_maxtpm_missing_concurrency_keeps_global_metrics_available(target, rows, reason):
+    backend = StandardMetrics({"maxtpm": True}).create_backend(seed=0)
+    backend.open()
+    try:
+        backend.consume((session(0, 300), *occupancy(*rows),
+                         turn("before", 10), turn("start", 20), turn("after", 200)))
+        spec = replace(trial(3), load_profile=LoadProfile("test", target_concurrency=target))
+        report = backend.finalize_trial(spec)
+        assert by_name(report.points, "maxtpm")["maxtpm"].unavailable_reason == reason
+        assert by_name(report.points)["succeeded"].value == 3
+    finally:
+        backend.close()
+
+
+@pytest.mark.parametrize("count,end_reason", [(5, "first_pass_completed"), (6, "trial_ended")])
+def test_maxtpm_keeps_observed_end_when_load_holds_and_caps_first_pass(count, end_reason):
+    backend = StandardMetrics({"maxtpm": True}).create_backend(seed=0)
+    backend.open()
+    try:
+        backend.consume((session(0, 300), session(8, 9999), *occupancy((1, 192)),
+                         *(turn(str(i), stamp) for i, stamp in enumerate((10, 20, 80, 140, 260))),
+                         replace(turn("cycle", 9000, prompt=99999), session_id="session-8")))
+        spec = replace(trial(count), load_profile=LoadProfile("test", target_concurrency=192))
+        report = backend.finalize_trial(spec)
+        assert report.diagnostics["maxtpm_start_turns"] == (2 if count == 5 else 3)
+        assert report.diagnostics["maxtpm_end_reason"] == end_reason
+        assert report.diagnostics["maxtpm_underfill_confirmed_ns"] is None
+        expected_end = 260 * NANO + 1 if count == 5 else 9999 * NANO + 1
+        assert report.diagnostics["maxtpm_end_ns"] == expected_end
+        if count == 5:
+            assert by_name(report.points, "maxtpm")["maxtpm_minutes"].value == 4
+    finally:
+        backend.close()
+
+
+def test_maxtpm_dynamic_end_uses_192_requests_and_preserves_global_statistics():
+    reports = []
+    for enabled in (False, True):
+        backend = StandardMetrics({"maxtpm": enabled, "pricing": PRICES}).create_backend(seed=0)
+        backend.open()
+        try:
+            backend.consume((session(0, 301), *occupancy((1, 192), (175, 191)),
+                *(turn(str(i), stamp, prompt=90, completion=10, cached=25)
+                  for i, stamp in enumerate((10, 20, 30, 40, 60, 100, 140, 180, 240, 300)))))
+            spec = replace(trial(10), load_profile=LoadProfile(
+                "test", target_concurrency=192, max_active_sessions=384
+            ))
+            reports.append(backend.finalize_trial(spec))
+        finally:
+            backend.close()
+    assert [p for p in reports[0].points if p.window == "overall"] == [
+        p for p in reports[1].points if p.window == "overall"
+    ]
+    report = reports[1]
+    assert report.diagnostics["maxtpm_start_ns"] == 40 * NANO
+    assert report.diagnostics["maxtpm_end_ns"] == 175 * NANO
+    assert report.diagnostics["maxtpm_underfill_confirmed_ns"] == 235 * NANO
+    assert report.diagnostics["maxtpm_end_turns"] == 7
+    summary = by_name(report.points, "maxtpm")
+    assert summary["maxtpm_minutes"].value == 2
+    assert summary["maxtpm"].value == 200
+    assert summary["maxtpm_input_tpm"].value == 180
+    assert summary["maxtpm_output_tpm"].value == 20
+    assert summary["maxtpm_cache_hit_rate"].value == pytest.approx(25 / 90)
+    assert summary["revenue_per_minute"].value == pytest.approx(0.43)
+    assert summary["succeeded"].value == 4
+
+
+def test_maxtpm_terminal_clock_covers_cancelled_turns_without_transport_completion():
+    backend = StandardMetrics({"maxtpm": True}).create_backend(seed=0)
+    backend.open()
+    try:
+        backend.consume((session(0, 5), *occupancy((1, 1)),
+            *(replace(turn(str(i), stamp, status="cancelled"), response_completed_ns=None)
+              for i, stamp in enumerate((10, 20, 80, 140, 200)))))
+        report = backend.finalize_trial(trial(5))
+        assert report.diagnostics["maxtpm_start_ns"] == 20 * NANO
+        assert report.diagnostics["maxtpm_end_ns"] == 200 * NANO + 1
+        assert report.diagnostics["maxtpm_excluded_tail_ns"] == 1
+        assert by_name(report.points, "maxtpm")["maxtpm_minutes"].value == 3
+        assert by_name(report.points, "maxtpm")["maxtpm"].value == 0
+    finally:
+        backend.close()
+
+
 @pytest.mark.parametrize('mode', ['stream', 'non_stream'])
 def test_maxtpm_latencies_use_exact_successful_completion_cohort_and_pooled_quantiles(mode):
     backend=StandardMetrics({'maxtpm':True}).create_backend(seed=0)
@@ -108,11 +231,13 @@ def test_maxtpm_latencies_use_exact_successful_completion_cohort_and_pooled_quan
                        request_ns=25*NANO,first_ns=28*NANO,last_ns=31*NANO)
         after=replace(turn('after',200,mode=mode),request_ns=26*NANO,
                       first_ns=27*NANO,last_ns=29*NANO)
-        backend.consume((session(0,9999),session(8,9999),turn('before',19,mode=mode),first,cross,
+        backend.consume((*occupancy((1, 1), (140, 0)),
+            session(0,9999),session(8,9999),turn('before-2',17,mode=mode),
+            turn('before-3',18,mode=mode),turn('before',19,mode=mode),first,cross,
             turn('failed',80,status='failed',mode=mode),normal,turn('boundary',140,mode=mode),after,
             turn('after2',201,mode=mode),
             replace(turn('cycle',40,prompt=999,completion=999,mode=mode),session_id='session-8')))
-        report=backend.finalize_trial(trial(8))
+        report=backend.finalize_trial(trial(10))
         points={(p.metric,p.statistic):p for p in report.points if p.window=='maxtpm'}
         assert points['succeeded','value'].value==3
         assert points['workload_rps','value'].value==pytest.approx(3/120)
@@ -143,13 +268,15 @@ def test_maxtpm_latencies_use_exact_successful_completion_cohort_and_pooled_quan
         backend.close()
 
 
-def test_maxtpm_uses_turn_quartiles_before_sessions_finish_and_keeps_zero_minute():
+def test_maxtpm_starts_at_40_percent_and_ends_at_sustained_underfill_with_zero_minute():
     backend = StandardMetrics({"maxtpm": True}).create_backend(seed=0)
     backend.open()
     try:
         backend.consume((
+            *occupancy((1, 1), (155, 0)),
             session(0, 9999), session(8, 5),
             replace(turn("cycle", 5, prompt=999), session_id="session-8"),
+            turn("before-2", 17, prompt=999), turn("before-3", 18, prompt=999),
             turn("before", 19, prompt=999),
             turn("first", 20, prompt=90, completion=10),
             replace(turn("cycle-in-window", 21, prompt=999), session_id="session-8"),
@@ -159,7 +286,7 @@ def test_maxtpm_uses_turn_quartiles_before_sessions_finish_and_keeps_zero_minute
             turn("last", 155, prompt=999),
             turn("after", 300), turn("after2", 301),
         ))
-        report = backend.finalize_trial(trial(8))
+        report = backend.finalize_trial(trial(10))
         summary = by_name(report.points, "maxtpm")
         assert summary["maxtpm"].value == 50
         assert summary["maxtpm_minutes"].value == 2
@@ -168,25 +295,29 @@ def test_maxtpm_uses_turn_quartiles_before_sessions_finish_and_keeps_zero_minute
         assert report.diagnostics["maxtpm_start_ns"] == 20 * NANO
         assert report.diagnostics["maxtpm_end_ns"] == 155 * NANO
         assert report.diagnostics["maxtpm_excluded_tail_ns"] == 15 * NANO
-        assert report.diagnostics["maxtpm_start_turns"] == 2
-        assert report.diagnostics["maxtpm_end_turns"] == 6
-        assert summary["maxtpm"].formula_version == "dataset-turn-maxtpm-v5-25-75-first-pass"
+        assert report.diagnostics["maxtpm_start_turns"] == 4
+        assert report.diagnostics["maxtpm_end_turns"] == 8
+        assert report.diagnostics["maxtpm_progress_start_fraction"] == 0.4
+        assert "maxtpm_progress_end_fraction" not in report.diagnostics
+        assert report.diagnostics["maxtpm_underfill_confirmed_ns"] == 215 * NANO
+        assert report.diagnostics["maxtpm_end_reason"] == "concurrency_under_target_60s"
+        assert summary["maxtpm"].formula_version == "dataset-turn-maxtpm-v6-40pct-underfill-60s-first-pass"
     finally:
         backend.close()
 
 
 @pytest.mark.parametrize("count,turns,reason", [
     (None, (), "dataset_size_not_reported"),
-    (4, (), "dataset_25_percent_not_completed"),
-    (4, (turn("one", 10),), "dataset_75_percent_not_completed"),
-    (2, (turn("one", 10), turn("two", 30)), "no_complete_minute_between_dataset_quartiles"),
-    (1, (turn("one", 10),), "no_complete_minute_between_dataset_quartiles"),
+    (4, (), "dataset_40_percent_not_completed"),
+    (4, (turn("one", 10),), "dataset_40_percent_not_completed"),
+    (2, (turn("one", 10), turn("two", 30)), "no_complete_minute_in_maxtpm_window"),
+    (1, (turn("one", 10),), "no_complete_minute_in_maxtpm_window"),
 ])
 def test_maxtpm_short_or_partial_data_is_unavailable(count, turns, reason):
     backend = StandardMetrics({"maxtpm": True}).create_backend(seed=0)
     backend.open()
     try:
-        backend.consume((session(0, 9999), *turns))
+        backend.consume((*occupancy((1, 1)), session(0, 9999), *turns))
         points=backend.finalize_trial(trial(count)).points
         point = by_name(points, "maxtpm")["maxtpm"]
         assert point.value is None and point.unavailable_reason == reason
@@ -196,12 +327,12 @@ def test_maxtpm_short_or_partial_data_is_unavailable(count, turns, reason):
         backend.close()
 
 
-def test_maxtpm_rounds_quartiles_counts_terminal_turns_and_not_retry_attempts():
+def test_maxtpm_rounds_40_percent_counts_terminal_turns_and_not_retry_attempts():
     backend = StandardMetrics({"maxtpm": True}).create_backend(seed=0)
     backend.open()
     try:
         cancelled = replace(turn("cancel", 80, status="cancelled"), response_completed_ns=None)
-        backend.consume((session(0, 9999),
+        backend.consume((*occupancy((1, 1), (140, 0)), session(0, 9999),
             turn("before", 10),
             AttemptFact(**asdict(turn("retry", 11, status="failed"))),
             turn("start", 20, prompt=90, completion=10),
@@ -220,7 +351,7 @@ def test_maxtpm_missing_usage_does_not_drop_a_minute_or_request():
     backend = StandardMetrics({"maxtpm": True}).create_backend(seed=0)
     backend.open()
     try:
-        backend.consume((session(0, 9999),
+        backend.consume((*occupancy((1, 1), (140, 0)), session(0, 9999),
             turn("start", 10, prompt=0, completion=0),
             turn("unknown", 20, prompt=None), turn("last", 140), turn("after", 200)))
         report = backend.finalize_trial(trial(4))
@@ -261,7 +392,8 @@ def test_maxtpm_explains_missing_cached_usage_without_changing_throughput_cohort
     backend=StandardMetrics({'maxtpm':True,'pricing':PRICES}).create_backend(seed=0)
     backend.open()
     try:
-        backend.consume((session(0,9999),turn('start',10,prompt=100,completion=10,cached=0),
+        backend.consume((*occupancy((1, 1), (140, 0)),
+                         session(0,9999),turn('start',10,prompt=100,completion=10,cached=0),
                          turn('missing-cache',20,prompt=100,completion=10),
                          turn('end',140,prompt=100,completion=10,cached=0),
                          turn('after',200,prompt=100,completion=10,cached=0)))
@@ -395,6 +527,9 @@ def test_minute_revenue_uses_same_cohort_including_empty_minutes():
         backend.consume(
             (
                 session(0, 9999),
+                *occupancy((1, 1), (215, 0)),
+                turn("before-2", 17, prompt=999, cached=999),
+                turn("before-3", 18, prompt=999, cached=999),
                 turn("before", 19, prompt=999, cached=999),
                 retry,
                 final,
@@ -405,7 +540,7 @@ def test_minute_revenue_uses_same_cohort_including_empty_minutes():
                 turn("after", 300), turn("after2", 400),
             )
         )
-        report = backend.finalize_trial(trial(8))
+        report = backend.finalize_trial(trial(10))
         summary = by_name(report.points, "maxtpm")
         assert summary["maxtpm_minutes"].value == 3
         assert summary["maxtpm"].value == pytest.approx(440 / 3)
@@ -435,6 +570,7 @@ def test_minute_revenue_keeps_unknown_cache_unknown(cache):
         backend.consume(
             (
                 session(0, 9999),
+                *occupancy((1, 1), (140, 0)),
                 turn("start", 10, prompt=0, completion=0, cached=0),
                 turn("unknown", 20, prompt=100, completion=10, cached=cache),
                 turn("end", 140), turn("after", 200),
@@ -457,7 +593,8 @@ def test_minute_revenue_equal_input_prices_can_price_unknown_cache():
     backend.open()
     try:
         backend.consume(
-            (session(0, 9999), turn("start", 10, prompt=0, completion=0, cached=0),
+            (*occupancy((1, 1), (140, 0)),
+             session(0, 9999), turn("start", 10, prompt=0, completion=0, cached=0),
              turn("unknown", 20, prompt=100, completion=10), turn("end", 140), turn("after", 200))
         )
         summary = by_name(backend.finalize_trial(trial(4)).points, "maxtpm")

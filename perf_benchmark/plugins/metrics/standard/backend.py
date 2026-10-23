@@ -265,7 +265,7 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
             (int(row[0]), int(row[1]))
             for row in self.db.execute(
                 "SELECT at_ns,value FROM occupancy "
-                "WHERE trial_id=? AND kind='in_flight' ORDER BY at_ns",
+                "WHERE trial_id=? AND kind='in_flight' ORDER BY at_ns,rowid",
                 [trial_id],
             ).fetchall()
         ]
@@ -293,7 +293,7 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
             points.extend(self._window_points(trial_id, window, target, fact))
         extra_diagnostics = {}
         if self.settings.get("maxtpm"):
-            extra_points, extra_windows, extra_diagnostics = dataset_maxtpm(self, fact, bounds)
+            extra_points, extra_windows, extra_diagnostics = dataset_maxtpm(self, fact, bounds, occupancy)
             points.extend(extra_points)
             window_rows.extend(extra_windows)
         points.extend(self.billing.finalize_trial(self, trial_id))
