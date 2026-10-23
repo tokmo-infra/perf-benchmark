@@ -1,7 +1,7 @@
 """Complete minute throughput and priced revenue in the same completion cohort."""
 
-import math
 from dataclasses import replace
+from itertools import groupby
 from decimal import Decimal
 from perf_benchmark.plugins.metrics.standard.catalog import METRIC_CATALOG
 
@@ -116,41 +116,92 @@ def minute_values(row, pricing):
     return values
 
 
-def dataset_maxtpm(backend, fact, bounds):
+def _concurrency_end(rows, start, end, target):
+    """Exclude the first underfilled spell lasting at least one full minute.
+
+    Equal-time transitions have zero duration; only their final value applies.
+    A recovery resets the timer. The observation horizon is never extended.
+    """
+    value = None
+    under_since = None
+    for stamp, changes in groupby(rows, key=lambda row: row[0]):
+        final = None
+        for _, final in changes:
+            pass
+        if stamp <= start:
+            value = final
+            under_since = start if value < target else None
+            continue
+        if value is None:
+            return None, None, "occupancy_not_observed_at_maxtpm_start"
+        if under_since is not None and min(stamp, end) - under_since >= MINUTE_NS:
+            return under_since, under_since + MINUTE_NS, "concurrency_under_target_60s"
+        if stamp >= end:
+            break
+        value = final
+        if value >= target:
+            under_since = None
+        elif under_since is None:
+            under_since = stamp
+    if value is None:
+        return None, None, "occupancy_not_observed_at_maxtpm_start"
+    if under_since is not None and end - under_since >= MINUTE_NS:
+        return under_since, under_since + MINUTE_NS, "concurrency_under_target_60s"
+    return end, None, None
+
+
+def dataset_maxtpm(backend, fact, bounds, occupancy):
     trial = fact.trial_id
     count = fact.scheduling.dataset_turn_count
-    lower = math.ceil(count / 4) if count else None
-    upper = math.ceil(3 * count / 4) if count else None
+    lower = (2 * count + 4) // 5 if count else None
+    target = fact.load_profile.target_concurrency
     start = end_boundary = None
+    confirmed_ns = end_reason = None
+    end_turns = None
     reason = "dataset_size_not_reported"
     pricing = backend.billing.pricing
     names = (*TOKEN_NAMES, "maxtpm_cache_hit_rate", *(REVENUE_NAMES if pricing else ()))
     if lower:
         row = backend._one(
             "SELECT count(*), max(completed_ns) FILTER (WHERE position=?), "
-            "max(completed_ns) FILTER (WHERE position=?) FROM ("
+            "max(completed_ns) FROM ("
             "SELECT coalesce(t.response_completed_ns,t.turn_completed_ns) AS completed_ns, "
             "row_number() OVER (ORDER BY coalesce(t.response_completed_ns,t.turn_completed_ns), "
             "s.ordinal,t.ordinal,t.turn_id) AS position "
             "FROM turns t JOIN sessions s ON s.trial_id=t.trial_id AND s.session_id=t.session_id "
             "WHERE t.trial_id=? AND s.ordinal<? "
             "AND coalesce(t.response_completed_ns,t.turn_completed_ns) IS NOT NULL "
-            "ORDER BY completed_ns,s.ordinal,t.ordinal,t.turn_id LIMIT ?)",
-            [lower, upper, trial, fact.scheduling.dataset_session_count, upper],
+            ")",
+            [lower, trial, fact.scheduling.dataset_session_count],
         )
         if row[0] >= lower:
             start = int(row[1])
-        if row[0] == upper:
-            end_boundary, reason = int(row[2]), None
+        if start is None:
+            reason = "dataset_40_percent_not_completed"
+        elif target is None:
+            reason = "target_concurrency_not_configured"
         else:
-            reason = "dataset_75_percent_not_completed" if start is not None else "dataset_25_percent_not_completed"
+            # Keep repeated sessions and post-first-pass cleanup out of the horizon.
+            # Cancelled Turns can finish after their last transport timestamp.
+            end = int(row[2]) + 1 if row[0] >= count else max(bounds[1], int(row[2]) + 1)
+            end_boundary, confirmed_ns, end_reason = _concurrency_end(occupancy, start, end, target)
+            reason = end_reason if end_boundary is None else None
+            if end_boundary is not None:
+                end_reason = end_reason or ("first_pass_completed" if row[0] >= count else "trial_ended")
+                end_turns = backend._one(
+                    "SELECT count(*) FROM turns t JOIN sessions s "
+                    "ON s.trial_id=t.trial_id AND s.session_id=t.session_id "
+                    "WHERE t.trial_id=? AND s.ordinal<? "
+                    "AND coalesce(t.response_completed_ns,t.turn_completed_ns)<=?",
+                    [trial, fact.scheduling.dataset_session_count, end_boundary],
+                )[0]
     minutes = (
         max(0, (end_boundary - start) // MINUTE_NS)
         if start is not None and end_boundary is not None
         else 0
     )
     if end_boundary is not None and not minutes:
-        reason = "no_complete_minute_between_dataset_quartiles"
+        reason = "no_complete_minute_in_maxtpm_window"
     points, windows, cohorts = [], [], []
     missing = [0,0,0]
 
@@ -171,7 +222,7 @@ def dataset_maxtpm(backend, fact, bounds):
             unit=pricing["currency"] + "/min"
             if name in REVENUE_NAMES
             else METRIC_CATALOG[name].unit,
-            formula_version="dataset-turn-maxtpm-v5-25-75-first-pass",
+            formula_version="dataset-turn-maxtpm-v6-40pct-underfill-60s-first-pass",
         )
 
     if minutes:
@@ -244,10 +295,14 @@ def dataset_maxtpm(backend, fact, bounds):
         "maxtpm_dataset_sessions": fact.scheduling.dataset_session_count,
         "maxtpm_dataset_turns": count,
         "maxtpm_progress_basis": "first_pass_terminal_turns",
-        "maxtpm_progress_start_fraction": 0.25,
-        "maxtpm_progress_end_fraction": 0.75,
+        "maxtpm_progress_start_fraction": 0.4,
+        "maxtpm_end_basis": "first_continuous_60s_below_target_concurrency",
+        "maxtpm_target_concurrency": target,
+        "maxtpm_underfill_grace_s": 60,
+        "maxtpm_underfill_confirmed_ns": confirmed_ns,
+        "maxtpm_end_reason": end_reason,
         "maxtpm_start_turns": lower,
-        "maxtpm_end_turns": upper,
+        "maxtpm_end_turns": end_turns,
         "maxtpm_start_ns": start,
         "maxtpm_end_ns": end_boundary,
         "maxtpm_complete_minutes": minutes,

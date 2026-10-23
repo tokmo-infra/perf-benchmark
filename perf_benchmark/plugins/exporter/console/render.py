@@ -11,7 +11,7 @@ from perf_benchmark.pipeline.contracts.results import MetricRecord, ResultReader
 
 WINDOW_LABELS = {
     "overall": "Overall",
-    "maxtpm": "Dataset 25%-75%",
+    "maxtpm": "maxTPM measurement",
     "last30s": "Last 30 s",
     "drop_first_20pct": "Drop first 20%",
     "steady_occupancy": "Steady occupancy",
@@ -232,7 +232,7 @@ def _render_trial(
         run_id, scope="trial", scope_id=trial["trial_id"],
     ) if item["window"].startswith("maxtpm:minute:")]
     if minute_windows:
-        table = Table(title="Dataset 25%-75% TPM / complete minutes")
+        table = Table(title="maxTPM / complete minutes")
         table.add_column("Minute")
         table.add_column("TPM", justify="right")
         table.add_column("Input / output tok", justify="right")

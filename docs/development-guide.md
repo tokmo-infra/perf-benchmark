@@ -253,7 +253,8 @@ Rust transport 在接收 bytes 时记录时间，JSON/SSE 解析和数据库操�
 TTFT/TPOT/ITL 只有可观测的流式文本响应才能计算，chunk 表示传输事件，token 数以 usage 为准。
 
 maxtpm 的 dataset_turn_count 取选中数据集的首遍轮数；活跃用户池由独立参数配置。
-completed TURN 的25%/75%确定完成时刻边界，成功最终 Turn 的 response_completed_at 归入连续60秒桶。
+completed TURN 的40%确定起点；从起点开始，in_flight 连续60秒低于 load_profile.target_concurrency 时，终点回溯到该段下降的起点，恢复到目标值即重新计时。同时间戳的并发变化按记录顺序取最终值。首遍完成或 Trial 结束限定观测上限；缺少目标请求并发或起点处的并发事实保持 unavailable。
+成功最终 Turn 的 response_completed_at 归入连续60秒桶。maxTPM 公式版本为 dataset-turn-maxtpm-v6-40pct-underfill-60s-first-pass；现有 schema 和 ResultReader 按保存的窗口、诊断和公式版本读写，历史结果保留其原有统计边界。
 重试增加 Attempt，每个最终 Turn 计一次轮次进度；吞吐取首遍 Session 的实际用量，完整零分钟保留，尾部窗口仅统计完整 60 秒。
 maxtpm 的延迟、prefill/decode 分布使用完全相同的首遍成功完成队列和完整分钟边界；跨边界请求按完成时间归属，保留完整请求计时。样本合并计算分位数，沿用标准指标的公式、单位、有效/合格/缺失样本数与不可用语义，独立公式版本标明完成队列；overall等窗口继续按请求开始时间选取延迟队列。
 原始缓存字段缺失时保留未知，prompt 总量包含 cached 分项，二者按包含关系统计。收费使用 Decimal 与同窗实际 usage。

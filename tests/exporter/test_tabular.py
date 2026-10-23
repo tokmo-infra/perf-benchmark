@@ -15,7 +15,7 @@ from perf_benchmark.plugins.metrics.standard import StandardMetrics
 from perf_benchmark.plugins.saver.sqlite import SQLiteSaver
 from perf_benchmark.plugins.exporter.tabular import TabularExporter, parse_settings
 from perf_benchmark.app.report import export_tables
-from tests.metrics.test_maxtpm_billing import PRICES, session, turn, trial
+from tests.metrics.test_maxtpm_billing import PRICES, occupancy, session, turn, trial
 from tests.result_records import frozen_record
 
 
@@ -465,6 +465,7 @@ async def test_sqlite_csv_excel_export_same_minute_revenue_and_request_usage(
         backend.consume(
             (
                 session(0, 9999),
+                *occupancy((1, 1)),
                 turn("start", 10, prompt=0, completion=0, cached=0),
                 turn("end", 140),
                 turn("known", 20, prompt=100, completion=10, cached=25),
@@ -560,6 +561,7 @@ async def test_sqlite_csv_excel_export_same_minute_revenue_and_request_usage(
     assert float(summary["maxtpm"]) == pytest.approx(.000055)
     assert summary["maxtpm_unit"] == '百万token/M'
     native = reader.metric_points(run.id, scope="trial", scope_id=tr.id, window="maxtpm")
+    assert native["maxtpm"]["formula_version"] == "dataset-turn-maxtpm-v6-40pct-underfill-60s-first-pass"
     assert native["decode_throughput"]["statistics"]["time_wm"] == 9
     assert float(summary["maxtpm_decode_throughput_time_weighted_mean"]) == 9
     assert float(summary["revenue_per_minute"]) == pytest.approx(0.1175)
