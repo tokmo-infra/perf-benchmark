@@ -229,12 +229,16 @@ extra_body:
 
 准备探测使用独立短请求，可能产生少量服务用量；正式统计和计费仅包含测试请求。选定档位冻结在运行配置中，运行证据保存各次探测的档位与HTTP状态，Excel的生成参数保存实际选择值。服务接受参数表示协议校验通过，模型执行效果由部署实现决定。正式测量期间沿用已冻结的请求设置和正常失败处理。
 
-Chat在 `executor.settings.extra_body` 中配置 `reasoning_effort`；省略或 `auto` 使用上述顺序。显式字符串（例如 `high`、`low`）固定发送该值，`null` 省略该字段并沿用服务端设置。显式 `thinking`、`enable_thinking` 或 `chat_template_kwargs.enable_thinking` 同样优先。
+Chat在 `executor.settings.extra_body` 中配置 `reasoning_effort`；省略或 `auto` 使用上述顺序。示例 YAML 同时配置 `chat_template_kwargs.enable_thinking: true` 和 `reasoning_effort: auto`，开启思考模式并协商最高可用档位。探测和正式请求携带相同的思考开关及模板参数。
 
 ```yaml
 extra_body:
   reasoning_effort: auto
+  chat_template_kwargs:
+    enable_thinking: true
 ```
+
+显式字符串（例如 `high`、`low`）固定发送该值，`null` 省略该字段并沿用服务端设置。显式关闭开关优先于 `auto`；单独配置思考开关时沿用该设置。`thinking`、`enable_thinking`、`chat_template_kwargs.thinking` 与 `chat_template_kwargs.enable_thinking` 均参与开关识别。服务采用其他思考协议时，按服务约定替换开关，例如 `thinking: {type: enabled}` 或 `chat_template_kwargs: {thinking: true}`；标准 API 的思考模式可由 `reasoning_effort` 控制。实际思考行为以服务端实现及响应为准。
 
 Responses使用 `extra_body.reasoning.effort`，同样支持 `auto`、显式字符串及 `null`。静态测试对应 `decode.reasoning_effort`。Embedding、Rerank和Completions继续沿用各自的协议配置。
 

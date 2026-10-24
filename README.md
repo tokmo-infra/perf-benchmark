@@ -59,7 +59,7 @@ pipeline:
 |---|---|
 | 写一份完整YAML | [使用指南](docs/user-guide.md)第2节；高级模式、鉴权与计费见对应章节 |
 | 换JSONL／Parquet／多轮数据 | `loader.settings.data_files`、`normalization.plugin`；使用指南第5节给出字段和格式 |
-| 指定服务、模型、生成参数 | `executor.settings.base_url/model/extra_body`；生成默认最多4,096 token，保留自然 EOS，使用指南第3节 |
+| 指定服务、模型、生成参数 | `executor.settings.base_url/model/extra_body`；示例默认开启思考并按 max、xhigh、high 协商档位，生成默认最多4,096 token并保留自然 EOS，使用指南第3节 |
 | 改并发、用户池、速率或时长 | `scheduler.settings`；使用指南第4节包含固定并发、扫描和SLO搜索 |
 | 决定SQLite放在哪里 | `saver.settings.path`；使用指南第10节 |
 | 导出HTML／CSV／Excel | 使用指南第7节；`report/export`读取已有 SQLite 或封存结果生成报告 |

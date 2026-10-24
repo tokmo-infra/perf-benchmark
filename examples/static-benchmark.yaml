@@ -11,7 +11,9 @@ service:
   # 两种模式均需本地 fast tokenizer 及 chat template；相对路径按 YAML 目录解析。
   tokenizer_path: /absolute/path/to/model-tokenizer
   endpoint: /chat/completions
-  extra_body: {} # 可加 top_p、chat_template_kwargs 等，阶段参数在下方设置。
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: true # Prefill 与 Decode 共用思考模板，档位由 Decode 配置。
   extra_headers: {}
   cache_salt_enabled: false # 引擎明确支持时启用；随机输入本身不保证零缓存命中。
   capacity_snapshot: null # 引擎未暴露完整 KV 几何时，可引用部署端实测 token 容量 JSON。
@@ -44,3 +46,4 @@ decode:
   temperature: 0.1
   requests_per_concurrency: null
   prompts: null # 默认八个复杂编码问题；可替换为非空字符串列表。
+  reasoning_effort: auto # 整个 Decode 矩阵共用 max、xhigh、high 中最高可用档位。

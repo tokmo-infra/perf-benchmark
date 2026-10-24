@@ -30,6 +30,9 @@ pipeline:
       timeout_seconds: 300
       extra_body:
         temperature: 0.1
+        reasoning_effort: auto # 整个并发矩阵共用测量前协商的思考档位。
+        chat_template_kwargs:
+          enable_thinking: true
   scheduler:
     plugin: single-turn-closed-loop
     settings:

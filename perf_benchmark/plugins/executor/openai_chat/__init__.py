@@ -38,6 +38,9 @@ def reasoning_probe(settings, effort):
     """Minimal protocol capability request, separate from benchmark attempts."""
     for base in dict.fromkeys(settings.get('base_urls') or [settings['base_url']]):
         yield base.rstrip('/') + settings['endpoint'], {
+            **{key: deepcopy(settings.get('extra_body', {})[key])
+               for key in ('thinking', 'enable_thinking', 'chat_template_kwargs')
+               if key in settings.get('extra_body', {})},
             'model': settings['model'], 'messages': [{'role': 'user', 'content': 'Reply OK.'}],
             'stream': False, 'max_tokens': 1, 'reasoning_effort': effort,
         }

@@ -169,7 +169,8 @@ async def test_static_fallback_is_once_per_matrix_and_records_actual_effort(
     mode['supported_efforts'] = {effort}
     config = load_static_benchmark_config({
         'case': 'default reasoning fallback',
-        'service': {'base_url': url, 'model': 'mock', 'tokenizer_path': str(static_tokenizer)},
+        'service': {'base_url': url, 'model': 'mock', 'tokenizer_path': str(static_tokenizer),
+                    'extra_body': {'chat_template_kwargs': {'enable_thinking': True}}},
         'prefill': {'enabled': False}, 'decode': {'concurrencies': [1, 2]},
         'output': {'excel_path': str(tmp_path / 'reasoning.xlsx')},
     })
@@ -181,6 +182,7 @@ async def test_static_fallback_is_once_per_matrix_and_records_actual_effort(
                                                     else ['max', 'xhigh', 'high'])
     assert len(measured) == sum(r.total_requests for r in results) == 9
     assert {p['reasoning_effort'] for p in measured} == {effort}
+    assert all(p['chat_template_kwargs']['enable_thinking'] is True for p in captured)
     for result in results:
         recipe = json.loads(Path(result.database).with_name('workload.json').read_text())
         assert recipe['reasoning']['selected'] == effort
@@ -198,6 +200,19 @@ def test_round_quota_and_minimum():
     for rounds in (0, 1, 2, True, 3.5):
         with pytest.raises(ValueError):
             load_static_benchmark_config({'case':'invalid rounds',"decode": {"rounds": rounds}})
+
+
+def test_static_yaml_template_enables_thinking_and_default_excel():
+    path = Path(__file__).resolve().parents[1] / 'examples' / 'static-benchmark.yaml'
+    config = load_static_benchmark_config(path)
+    assert config.service.extra_body['chat_template_kwargs']['enable_thinking'] is True
+    assert config.decode.reasoning_effort == 'auto'
+    assert config.output.excel_path.endswith('results/performance.xlsx')
+    runner = StaticBenchmarkRunner(config)
+    for prefill in (True, False):
+        extra = runner._executor(prefill=prefill)['extra_body']
+        assert extra['chat_template_kwargs']['enable_thinking'] is True
+        assert extra['reasoning_effort'] == (None if prefill else 'auto')
 
 
 @pytest.mark.parametrize('static_first', [True, False])
