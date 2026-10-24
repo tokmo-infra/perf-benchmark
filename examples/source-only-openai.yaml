@@ -29,6 +29,9 @@ pipeline:
       timeout_seconds: 300
       extra_body:
         temperature: 0.1
+        reasoning_effort: auto # 正式测量前按 max、xhigh、high 选择服务接受的最高档位。
+        chat_template_kwargs:
+          enable_thinking: true # 显式开启模板的思考模式。
   scheduler:
     plugin: single-turn-closed-loop
     settings:

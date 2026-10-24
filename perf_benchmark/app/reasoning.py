@@ -33,9 +33,15 @@ def _selection(extra, protocol):
                 raise ValueError('reasoning effort must be a nonempty string, auto or null')
             return 'explicit', value
     template = extra.get('chat_template_kwargs', {})
-    if any(k in extra for k in ('thinking', 'enable_thinking')) or (
-        isinstance(template, dict) and 'enable_thinking' in template
-    ):
+    switches = [extra[k] for k in ('thinking', 'enable_thinking') if k in extra]
+    if isinstance(template, dict):
+        switches += [template[k] for k in ('thinking', 'enable_thinking') if k in template]
+    enabled = all(value is True or isinstance(value, dict) and (
+        value.get('enabled') is True or value.get('type') == 'enabled'
+    ) for value in switches)
+    # Explicit auto effort composes with enabled switches. A switch alone,
+    # or an explicit disabled switch, keeps the caller's existing policy.
+    if switches and (key not in extra or not enabled):
         extra.pop(key, None)
         return 'explicit-thinking', None
     if protocol == 'openai-responses':

@@ -1,4 +1,6 @@
 
+from copy import deepcopy
+
 from perf_benchmark.core.validation import positive_int, positive_number
 from perf_benchmark.plugins import register_plugin
 from perf_benchmark.runtime.http.rust_executor import RustHttpExecutorRuntime
@@ -8,6 +10,9 @@ from perf_benchmark.runtime.http.snapshot_http import http_settings, snapshot_re
 
 def reasoning_probe(settings, effort):
     yield settings['base_url'].rstrip('/') + '/v1/responses', {
+        **{key: deepcopy(settings.get('extra_body', {})[key])
+           for key in ('thinking', 'enable_thinking', 'chat_template_kwargs')
+           if key in settings.get('extra_body', {})},
         'model': settings['model'], 'input': 'Reply OK.', 'store': False,
         'stream': False, 'max_output_tokens': 16, 'reasoning': {'effort': effort},
     }

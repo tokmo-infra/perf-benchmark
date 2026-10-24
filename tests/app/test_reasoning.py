@@ -68,6 +68,80 @@ async def test_explicit_configuration_avoids_network(extra):
     assert original['pipeline']['executor']['settings']['extra_body'] == extra
 
 
+@pytest.mark.parametrize('protocol', ['openai-chat', 'openai-responses'])
+@pytest.mark.parametrize('switch', [
+    {'enable_thinking': True}, {'thinking': {'enabled': True}},
+    {'thinking': {'type': 'enabled'}},
+    {'chat_template_kwargs': {'enable_thinking': True, 'custom_option': 'kept'}},
+    {'chat_template_kwargs': {'thinking': True}},
+])
+async def test_auto_effort_composes_with_enabled_thinking_and_probes_same_switch(protocol, switch):
+    calls = []
+
+    async def handle(request):
+        body = await request.json()
+        for key, value in switch.items():
+            assert body[key] == value
+        effort = body.get('reasoning_effort') or body['reasoning']['effort']
+        calls.append(effort)
+        if effort != 'high':
+            return web.json_response({'error': {'message':
+                f'unsupported reasoning effort {effort}'}}, status=400)
+        return web.json_response({'choices': []})
+
+    app = web.Application()
+    app.router.add_post('/v1/chat/completions', handle)
+    app.router.add_post('/v1/responses', handle)
+    async with TestServer(app) as server:
+        effort = ({'reasoning_effort': 'auto'} if protocol == 'openai-chat'
+                  else {'reasoning': {'effort': 'auto', 'summary': 'auto'}})
+        original = config(str(server.make_url('')).rstrip('/'),
+                          protocol=protocol, extra={**switch, **effort})
+        snapshot = deepcopy(original)
+        resolved, evidence = await resolve(original)
+    actual = resolved['pipeline']['executor']['settings']['extra_body']
+    for key, value in switch.items():
+        assert actual[key] == value
+    assert (actual['reasoning_effort'] if protocol == 'openai-chat'
+            else actual['reasoning']['effort']) == 'high'
+    assert calls == ['max', 'xhigh', 'high']
+    assert evidence['mode'] == 'auto' and evidence['selected'] == 'high'
+    assert original == snapshot
+    frozen, fact = await resolve(resolved)
+    assert frozen == resolved and fact['mode'] == 'explicit'
+
+
+@pytest.mark.parametrize('protocol', ['openai-chat', 'openai-responses'])
+@pytest.mark.parametrize('switch', [
+    {'enable_thinking': False}, {'thinking': {'enabled': False}},
+    {'thinking': {'type': 'disabled'}},
+    {'chat_template_kwargs': {'enable_thinking': False}},
+    {'chat_template_kwargs': {'thinking': False}},
+])
+async def test_explicit_disabled_switch_overrides_auto_without_network(protocol, switch):
+    effort = ({'reasoning_effort': 'auto'} if protocol == 'openai-chat'
+              else {'reasoning': {'effort': 'auto'}})
+    original = config('http://127.0.0.1:1', protocol=protocol, extra={**switch, **effort})
+    value, fact = await resolve(original)
+    assert value['pipeline']['executor']['settings']['extra_body'] == switch
+    assert fact['mode'] == 'explicit-thinking' and fact['probes'] == []
+    assert original['pipeline']['executor']['settings']['extra_body'] == {**switch, **effort}
+
+
+@pytest.mark.parametrize('name', ['source-only-openai', 'concurrency-sweep', 'multi-turn'])
+def test_pipeline_yaml_templates_enable_thinking_with_auto_effort_and_excel(name):
+    from pathlib import Path
+    from perf_benchmark.app.config import load_config
+
+    path = Path(__file__).resolve().parents[2] / 'examples' / (name + '.yaml')
+    value, _ = load_config(path)
+    extra = value['pipeline']['executor']['settings']['extra_body']
+    assert extra['reasoning_effort'] == 'auto'
+    assert extra['chat_template_kwargs']['enable_thinking'] is True
+    exporter = value['pipeline']['exporter']
+    assert not exporter or any(p['plugin'] == 'tabular' for p in exporter['plugins'])
+
+
 @pytest.mark.parametrize('effort', ['low', None])
 async def test_explicit_responses_configuration_preserves_other_reasoning_options(effort):
     value, fact = await resolve(config('http://127.0.0.1:1', protocol='openai-responses',

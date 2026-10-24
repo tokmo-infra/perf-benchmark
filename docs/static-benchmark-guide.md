@@ -17,6 +17,8 @@ uv run perf-benchmark static examples/static-benchmark.yaml --only-decode --outp
 
 ## 负载
 
+示例在 `service.extra_body.chat_template_kwargs.enable_thinking` 中显式开启思考模式，并在 `decode.reasoning_effort: auto` 中启用档位协商。Prefill 与 Decode 共用模板开关，Decode 的准备探测携带相同模板参数。各阶段继续使用各自的输出 token 目标。服务采用其他思考开关时，按服务协议替换 `service.extra_body` 中的对应字段。
+
 - Prefill：从非特殊 token 随机生成文本，并用本地 **chat template（包含 generation prompt）** 校准目标长度。无法精确构造时停止并说明原因。默认每个测试点、每个请求采用不同的确定性序列，减少重复前缀；共享模板仍可能命中缓存，因此实际缓存命中以服务 usage 为准。引擎支持 `cache_salt` 时可显式开启 `service.cache_salt_enabled`。
 - Decode：默认轮换八个复杂编码问题，也可通过 `decode.prompts` 指定列表。`reasoning_effort: auto` 为默认设置，在正式测试前依次探测 `max`、`xhigh`、`high`，选择服务接受的最高档位并固定整个矩阵的请求值。服务明确拒绝当前思考档位时继续下一档；鉴权、限流、连接和其他请求错误立即报告。三档均被拒绝时停止准备。显式字符串固定发送该值，`null` 使用服务端设置。输出遵循 `max_tokens` 和 `ignore_eos`，正式请求错误沿用原生失败事实。
 - 思考能力探测使用独立短请求，可能产生少量服务用量；性能统计及计费仅包含正式测试请求。`workload.json` 保存选择结果和探测状态，Excel配置记录实际请求档位。服务接受参数表示协议校验通过，模型实际执行效果由服务实现决定。Prefill保持其单token测量设置。
