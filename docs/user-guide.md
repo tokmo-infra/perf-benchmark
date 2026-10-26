@@ -734,7 +734,7 @@ exporter:
 ```
 
 `output` 填输出目录，相对路径按 YAML 所在目录解析；`formats` 可填 `[csv]`、`[xlsx]` 或两者。
-可另设 `excel_path: results/glm-comparison.xlsx` 指定Excel文件路径。文件不存在时创建；已存在时，同名子表逐表核对首行标题，完全匹配后在表末尾追加本次Run的数据，缺少的子表自动创建，其余子表保留。标题不匹配时导出报错并保留原文件。数值、部分可用标记及原有行保留。该设置只控制Excel，CSV仍写到 `output`。
+可另设 `excel_path: results/glm-comparison.xlsx` 指定Excel文件路径。文件不存在时创建；已存在时，同名子表按完整列名对齐后追加本次Run的数据。原有列顺序和历史行保留，新指标列追加到末尾，各次测试缺失的指标保持空白。列名中的单位参与匹配，单位不同的指标分别保存。首列标题须一致，所有标题须为唯一的非空文本；校验失败时原文件保留。缺少的子表自动创建，其余子表保留。数值类型、部分可用标记和单元格样式沿用原生导出。该设置只控制Excel，CSV仍写到 `output`。
 
 静态 Prefill、Decode 和多轮对话可以共用一个工作簿：把静态配置的 `output.excel_path` 与多轮配置中 `pipeline.exporter.plugins` 列表内 tabular 的 `settings.excel_path` 指向同一个文件。静态结果写入 `Prefill性能测试`、`Decode性能测试` 等子表；多轮结果写入 `summary`、`minutes`、`requests`，采集服务容量时另附 `kv_capacity`。每次导出在文件锁内校验并原子追加，case 标识各次测试。相对路径分别以各自 YAML 所在目录解析。
 
