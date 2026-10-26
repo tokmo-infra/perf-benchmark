@@ -43,7 +43,7 @@ uv run perf-benchmark static examples/static-benchmark.yaml --only-decode --outp
 
 默认只导出一份合并 Excel：`Prefill性能测试`、`Decode性能测试`、`测试概览与配置`、`指标可用性`、`KV容量`。性能表首列记录case与测试点；首行/首列冻结，首列宽度按完整文本调整。固定单位直接写入列标题；长表的指标单位随行保留。每点完成后追加新增结果，失败/取消及原生 Run ID 一并保留。请求失败或取消时 CLI 返回非零退出码。
 
-`output.excel_path` 支持已有工作簿。同名子表的首行标题匹配后追加，缺少的子表自动创建，其他子表保留。将它与多轮 YAML 中 `pipeline.exporter.plugins` 列表内 tabular 的 `settings.excel_path` 设置为同一个路径，即可在同一 Excel 中保存静态 Prefill、Decode 和多轮结果。重复运行按 case 区分；每次静态运行只追加各测试点一次，配置记录一次。两个入口共用文件锁及原子发布流程。
+`output.excel_path` 支持已有工作簿。同名子表按完整列名对齐后追加，原有列顺序和历史行保留，新指标列追加到末尾，缺失指标留空。单位参与列名匹配，首列标题须一致，其余标题须为唯一的非空文本。缺少的子表自动创建，其他子表保留。将它与多轮 YAML 中 `pipeline.exporter.plugins` 列表内 tabular 的 `settings.excel_path` 设置为同一个路径，即可在同一 Excel 中保存静态 Prefill、Decode 和多轮结果。重复运行按 case 区分；每次静态运行只追加各测试点一次，配置记录一次。两个入口共用文件锁及原子发布流程。
 
 KV容量在每点请求开始前采集，记录GPU和CPU内存独立池能缓存的token总量。多轮及其他 `run` 测试使用同一采集入口，存入原生Run证据及Excel的 `kv_capacity` 表。SGLang读取每DP的server-info容量和HiCache总量指标；TP分片不重复相加。采集超时、鉴权限制或字段缺失会明确标未知，测试继续。引擎内部block预算单独标记为 `gpu_block_slots`，混合缓存缺少布局时不换算成完整模型容量。
 

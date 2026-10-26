@@ -265,7 +265,7 @@ summary 与 minutes 同时导出 maxTPM 窗口的缓存输入、未缓存输入�
 三项共享成功最终 Turn 的完成时间队列、完整分钟边界与 Decimal 单价运算；有效分项独立保留数值和缺失原因。
 summary 的三档单价、计价基数、币种和可选来源直接读取 Trial diagnostics.pricing；source 为冻结的非空文本元数据，费用计算继续使用原有单价与实际 usage。离线导出保留原价格，旧结果缺失的来源保持空白。
 表格导出保留缺失数值空白及部分数据的星号，maxTPM 命中率、缓存输入收入和总收入列仅输出数值及单位。summary 展示成功请求数；失败/取消计数、成功率、流式设置和 Trial 身份由底层结果保留。其余 reason 列沿用缺失原因，availability 元数据由底层指标和 ResultReader 保存，用于正确显示缺失和 partial；Excel 星号使用数字格式，单元格保持数值类型。
-应用Run配置必须显式提供单行case说明，作为Run证据保存并列在summary首列；低层Coordinator及历史库缺此证据时保留空白，不猜测描述。Excel冻结首行与首列，首列按中英文显示宽度适配。静态与tabular导出共用文件锁和原子发布：同名子表先验证全部表头再追加，缺少的子表创建，其余子表保留；表头冲突保留原文件。静态checkpoint只导出新增测试点，每次运行使用独立事实目录，支持共用工作簿及重复运行。
+应用Run配置必须显式提供单行case说明，作为Run证据保存并列在summary首列；低层Coordinator及历史库缺此证据时保留空白，不猜测描述。Excel冻结首行与首列，首列按中英文显示宽度适配。静态与tabular导出共用文件锁和原子发布：同名子表先验证首列身份、唯一非空标题及行列上限，再按完整列名对齐追加。原有列和历史行保持原位，新指标列追加到末尾，缺失指标留空，单位属于列身份。缺少的子表创建，其余子表保留；校验失败保留原文件。含公式的追加数据要求列顺序保持原位。静态checkpoint只导出新增测试点，每次运行使用独立事实目录，支持共用工作簿及重复运行。
 每个 CSV 与 XLSX 的 artifact kind 唯一。
 默认 console 与 tabular（仅 XLSX），显式 tabular 设置替换默认实例。summary 直接读取 Trial overall
 已存统计值，前置运行参数，末尾保留核心 maxtpm；全局分位数按正式指标导出。生成请求默认temperature=0.1、最多4,096 token并保留自然 EOS，显式参数优先（包括temperature=0）；Chat 显式配置 max_tokens=null 时省略默认输出上限，逐轮正整数目标继续优先，实际请求事实与画像的目标可为 null。固定输出仍要求显式目标。静态Prefill/Decode同样默认temperature=0.1，保留各自显式输出目标。
