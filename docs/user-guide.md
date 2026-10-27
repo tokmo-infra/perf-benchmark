@@ -73,6 +73,7 @@ pipeline:
     plugin: standard
     settings:
       maxtpm: true
+      maxtpm_start_percent: 40
   saver:
     plugin: sqlite
     settings:
@@ -105,7 +106,8 @@ uv run perf-benchmark run my-run.yaml
 | `name`, `seed` | 选填；建议写清测试名和固定 seed（seed 默认 0） |
 | `stream` / `timeout_seconds` | 选填，默认 `true` / 300 秒；`timeout_seconds` 限制一次 HTTP 请求尝试的总耗时；使用 `stream: true` 测量 TTFT/ITL |
 | `extra_body` | 填 `temperature/top_p` 等请求参数；生成默认 `temperature: 0.1`、最多4,096 token并保留自然 EOS；生成方式见 3.1 |
-| `metrics.settings.maxtpm` | 选填，默认 `false`，启用首遍完成 40% 轮次至持续并发不足前的完整分钟均值 |
+| `metrics.settings.maxtpm` | 选填，默认 `false`，启用首遍达到指定进度至持续并发不足前的完整分钟均值 |
+| `metrics.settings.maxtpm_start_percent` | 选填，默认 `40`；首遍轮次起点百分比，数值范围 `[0, 100)`，支持小数，`0` 表示从测试观测起点开始 |
 | `metrics.settings.pricing` | 选填，填写后启用费用统计 |
 | `observation`, `logging`, `hooks` | 选填，按需启用监控、日志和扩展 |
 
@@ -582,6 +584,7 @@ metrics:
   plugin: standard
   settings:
     maxtpm: true
+    maxtpm_start_percent: 40 # 40 表示首遍完成 40% 轮次时开始统计。
     pricing:
       currency: CNY
       per_tokens: 1000000
@@ -594,7 +597,9 @@ metrics:
 三个价格必填且可为 0；`currency` 默认 USD，`per_tokens` 默认每百万 token。
 可选 `source` 填写非空的价目表来源或价格说明，作为冻结的计价依据保存到结果中。
 
-**maxtpm 口径**：选中数据集共有 T 轮请求，首遍第 `ceil(T×0.4)` 轮完成时开始，按完成时间排序。
+**maxtpm 口径**：`maxtpm_start_percent` 使用百分数数值，默认 `40`，范围 `[0, 100)`，支持小数。
+例如 `25` 表示 25%，`12.5` 表示 12.5%。选中数据集共有 T 轮请求，配置值为 P 时，
+首遍第 `ceil(T×P/100)` 轮完成时开始，按完成时间排序；`P=0` 从测试观测起点开始。
 从起点开始，使用调度器记录的实际在途请求数与 `target_concurrency` 比较。实际并发连续 60 秒低于预设并发时，
 终点回溯到这段下降的起点；期间恢复到预设并发会重新计时。判定使用预设并发值本身。
 首遍完成或 Trial 提前结束时，实际观测终点作为区间上限。缺少目标请求并发或起点处的并发记录时，窗口保留 unavailable。
@@ -612,10 +617,10 @@ Excel summary 的 `maxtpm_ttft_*`、`maxtpm_tpot_*`、`maxtpm_e2e_*`、`maxtpm_p
 `maxtpm_decode_throughput_*` 等列列出 mean/P50/P90/P99、有效样本 n 和合格请求数 eligible_n；
 `maxtpm_workload_completion` 为同窗总输出 token/s，区别于单请求 decode tok/s。完整统计及缺失原因保存在原生 SQLite / 同身份 Parquet 中。
 缺少完整分钟时，这些窗口指标保留 unavailable；非流式、单 token 或缺少输出事件等情况沿用各指标的有效样本与缺失原因。
-运行结果在首遍达到 40%、并发观测可用、区间内包含完整分钟且 usage 有效时显示数值，其余情况显示 `unavailable`。
+运行结果在首遍达到配置的起点比例、并发观测可用、区间内包含完整分钟且 usage 有效时显示数值，其余情况显示 `unavailable`。
 进度按首遍全部轮次完成数量计算；循环测试沿用首遍轮次定位起点及限定统计队列。
 测试继续执行到配置的结束条件，maxTPM 区间选择只影响统计。全局 summary 指标沿用整体窗口。
-SQLite / 同身份 Parquet 保存起点比例、实际边界轮数和时间戳、目标并发、持续下降的确认时刻及结束原因；CSV/Excel 分钟表保存实际完整窗口。
+SQLite / 同身份 Parquet 保存 `maxtpm_start_percent`、起点比例、实际边界轮数和时间戳、目标并发、持续下降的确认时刻及结束原因；CSV/Excel 分钟表保存实际完整窗口。
 
 **每分钟收入**：对上面每个完整分钟的成功请求，按服务返回的实际 token 用量计算：
 
@@ -874,7 +879,7 @@ perf计费采用响应usage与客户端完成时间队列，Prometheus原始采�
 TTFT、请求延迟与整体输出吞吐参考[NVIDIA GenAI-Perf](https://github.com/triton-inference-server/perf_analyzer/blob/main/genai-perf/README.md)的客户端口径。
 [vLLM基准实现](https://github.com/vllm-project/vllm/blob/main/vllm/benchmarks/lib/endpoint_request_func.py)将末输出事件作为latency终点，
 对应本工具的`time_to_last_output`；本工具E2E另包含响应收尾，`response_drain`保存该段时间。maxTPM采用本工具明确约定的
-首遍40%进度起点、持续60秒并发不足的动态终点和完整分钟均值；跨窗口请求的整条usage归入完成时刻，原始事件和监控采样保留各自时间身份。
+首遍可配置进度起点（默认40%）、持续60秒并发不足的动态终点和完整分钟均值；跨窗口请求的整条usage归入完成时刻，原始事件和监控采样保留各自时间身份。
 
 ## 9. 离线数据与实验
 

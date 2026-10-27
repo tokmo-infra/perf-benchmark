@@ -48,7 +48,9 @@ pipeline:
       on_exhausted: cycle
   metrics:
     plugin: standard
-    settings: {}
+    settings:
+      maxtpm: true
+      maxtpm_start_percent: 40 # 首遍轮次完成比例，范围 [0, 100)，支持小数。
   saver:
     plugin: sqlite
     settings:
