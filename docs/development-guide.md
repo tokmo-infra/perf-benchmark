@@ -84,7 +84,7 @@ loader
 
 - 统一管理 runtime prepare、Turn 执行、取消、metrics 记录、增量持久化和 runtime close。
 - 同一个 Session 中的 Turn 必须串行执行。
-- Scheduler 通过 TurnControl.send/retry/cancel 和 next_turn 决定下一步操作。尚未执行的 Turn 保持 pending；已准入或执行的 Turn 按真实终态持久化。
+- Scheduler 通过 TurnControl.send/retry/cancel 和 next_turn 决定下一步操作。待执行的 Turn 保持 pending；已准入或执行的 Turn 按真实终态持久化。
 - Attempt 是 (turn_id, attempt_no) 标识的执行事实；最终 Attempt 决定 Turn 主指标，所有 Attempt 独立记录。预期场景结果与原始请求事实分别记录。
 - 在并发执行时安全聚合 Session 和 Trial 的终态。
 
@@ -144,7 +144,7 @@ Hook 提供可选的受控拦截与观察能力。仅 `run.before_start` 和 `tr
 - Scheduler 只保留 `TrialPlan.resources.ready_capacity` 指定的有界 ready window；内置有并发上限的模式令其等于并发数，无并发上限的 open-loop 令其等于 pending request 上限。正文准备统一遵循该窗口容量。
 - 接受 metadata 内存随 Turn 数线性增长；有并发上限 C 时，执行中及清理中最多 2C 个正文，加上最多 C 个 ready 正文，发送工作集约 `3 × C × request body`。
 - Live continuation 只保存在当前 SessionRunner 私有内存，Session 结束立即释放；实测回复由当前 SessionRunner 管理，数据集提供的 recorded response 通过 `recorded_response_payload_ref` 引用。
-- 取消时持久化已 admitted/active 的部分结果，预建且尚未执行的对象保持 pending。
+- 取消时持久化已 admitted/active 的部分结果，预建的待执行对象保持 pending。
 - DuckDB 和 SQLite 操作由后台线程执行，asyncio event loop 专注请求调度与收发。
 - Metrics 与 Saver 的输入队列各固定为 8,192 条记录，按实际记录计数，容量独立于 Scheduler 配置；每批最多 100 条，首条到达后最多等待 100 ms 组批。
 - 数据库 writer 必须由单线程独占；SQLite 每批提交事务。队列容量包含正在处理的记录；余量等待由完成、故障或关闭事件通知。`flush()` 等待排队、处理和结果转交；Saver 的 flush 还确认提交完成。
@@ -172,9 +172,9 @@ Hook 提供可选的受控拦截与观察能力。仅 `run.before_start` 和 `tr
 - Run 级别的分布指标和时间加权指标通过 DuckDB 完成最终计算。
 - prefill/decode 的 `time_wm` 使用同一有效成功请求队列的 token 总量除以时长总量；prefill 使用 prompt/TTFT，decode 使用 `(completion_tokens - 1)/(last_ns - first_ns)`，聚合时统一秒单位。正 token 权重、正时长和可用的单请求速度共同限定资格，统计保存独立有效/合格/缺失样本数。`twm` 继续表示 token 加权算术平均，`am` 和分位数保留客户端接收分布。
 - 时间加权统计的公式版本为 `client-speed-time-weighted-v1`；maxTPM 完成队列使用 `dataset-turn-maxtpm-speed-time-weighted-v1-completion-cohort`。整体窗口、实时桶和 maxTPM 复用分布聚合；summary 的速度主列使用 `*_time_weighted_mean`，进度日志使用 `decode_time_weighted_tok_s`。旧结果缺少该统计时，导出保持空白；原始事实可用于独立重算。
-- 无法观测的指标必须保留在指标目录中，并明确记录 availability 和 reason。
+- 观测缺失的指标保留在指标目录中，并明确记录 availability 和 reason。
 - SSE chunk / 输出事件按传输事实记录，token 数以响应 usage 为准；非流式响应的 TTFT、TPOT、ITL、prefill/decode throughput 标记为 `non_streaming_response`，非文本输出遵循 `non_text_output` 契约，并保留 availability 和 reason。
-- Chat流的协议完成状态与内容长度分别判定：结构有效的终止choice及完整`[DONE]`允许空内容成功，JSON/API错误与不完整流保持失败。零输出事件的首输出及decode时间点保持缺失，E2E与usage沿用已有观测；协议成功与内容质量分别记录。
+- Chat流的协议完成状态与内容长度分别判定：结构有效的终止choice及完整`[DONE]`允许空内容成功，JSON/API 错误与流完整性校验错误保留失败状态。零输出事件的首输出及decode时间点保持缺失，E2E与usage沿用已有观测；协议成功与内容质量分别记录。
 - 指标定义、单位、权重或 measured duration 边界的变更须同步契约、schema、读取器及行为测试。
 - `ResultReader` 是 Exporter 的读取边界，提供通用 Run/Trial/Metric/Comparison 视图和 `comparison_points(run_id)`。Exporter 从该读取器获取已保存结果并返回 `ExportResult`，由 Host 统一登记 artifact 和发送生命周期事件。
 - SQLite 及派生结果保存脱敏的配置、请求事实和指标；凭据仅用于发送，原始 SSE chunk 在处理后释放。
@@ -257,7 +257,7 @@ metrics.settings.maxtpm_start_percent 默认40，接受 [0, 100) 内的有限数
 从起点开始，in_flight 连续60秒低于 load_profile.target_concurrency 时，终点回溯到该段下降的起点，恢复到目标值即重新计时。同时间戳的并发变化按记录顺序取最终值。首遍完成或 Trial 结束限定观测上限；缺少目标请求并发或起点处的并发事实保持 unavailable。
 成功最终 Turn 的 response_completed_at 归入连续60秒桶。maxTPM 公式版本为 dataset-turn-maxtpm-v7-configurable-start-underfill-60s-first-pass；诊断保存实际百分比与比例，现有 schema 和 ResultReader 按保存的窗口、诊断和公式版本读写，历史结果保留其原有统计边界。
 重试增加 Attempt，每个最终 Turn 计一次轮次进度；吞吐取首遍 Session 的实际用量，完整零分钟保留，尾部窗口仅统计完整 60 秒。
-maxtpm 的延迟、prefill/decode 分布使用完全相同的首遍成功完成队列和完整分钟边界；跨边界请求按完成时间归属，保留完整请求计时。样本合并计算分位数，沿用标准指标的公式、单位、有效/合格/缺失样本数与不可用语义，独立公式版本标明完成队列；overall等窗口继续按请求开始时间选取延迟队列。
+maxtpm 的延迟、prefill/decode 分布使用完全相同的首遍成功完成队列和完整分钟边界；跨边界请求按完成时间归属，保留完整请求计时。样本合并计算分位数，沿用标准指标的公式、单位、有效/合格/缺失样本数与 availability 语义，独立公式版本标明完成队列；overall等窗口继续按请求开始时间选取延迟队列。
 原始缓存字段缺失时保留未知，prompt 总量包含 cached 分项，二者按包含关系统计。收费使用 Decimal 与同窗实际 usage。
 缓存总量和费用汇总已有可用数据，部分缺失时数值标记 availability=partial，报告显示 `*`；
 数据全部缺失时保持 unavailable。费用总量相加已有可计费的输入、输出分项，缺失缓存保留未知；
@@ -266,7 +266,7 @@ summary 与 minutes 同时导出 maxTPM 窗口的缓存输入、未缓存输入�
 三项共享成功最终 Turn 的完成时间队列、完整分钟边界与 Decimal 单价运算；有效分项独立保留数值和缺失原因。
 summary 的三档单价、计价基数、币种和可选来源直接读取 Trial diagnostics.pricing；source 为冻结的非空文本元数据，费用计算继续使用原有单价与实际 usage。离线导出保留原价格，旧结果缺失的来源保持空白。
 表格导出保留缺失数值空白及部分数据的星号，maxTPM 命中率、缓存输入收入和总收入列仅输出数值及单位。summary 展示成功请求数；失败/取消计数、成功率、流式设置和 Trial 身份由底层结果保留。其余 reason 列沿用缺失原因，availability 元数据由底层指标和 ResultReader 保存，用于正确显示缺失和 partial；Excel 星号使用数字格式，单元格保持数值类型。
-应用Run配置必须显式提供单行case说明，作为Run证据保存并列在summary首列；低层Coordinator及历史库缺此证据时保留空白，不猜测描述。Excel冻结首行与首列，首列按中英文显示宽度适配。静态与tabular导出共用文件锁和原子发布：同名子表先验证首列身份、唯一非空标题及行列上限，再按完整列名对齐追加。原有列和历史行保持原位，新指标列追加到末尾，缺失指标留空，单位属于列身份。缺少的子表创建，其余子表保留；校验失败保留原文件。含公式的追加数据要求列顺序保持原位。静态checkpoint只导出新增测试点，每次运行使用独立事实目录，支持共用工作簿及重复运行。
+应用Run配置必须显式提供单行case说明，作为Run证据保存并列在summary首列；低层 Coordinator 及历史库缺此证据时，描述列保留空白。Excel冻结首行与首列，首列按中英文显示宽度适配。静态与tabular导出共用文件锁和原子发布：同名子表先验证首列身份、唯一非空标题及行列上限，再按完整列名对齐追加。原有列和历史行保持原位，新指标列追加到末尾，缺失指标留空，单位属于列身份。缺少的子表创建，其余子表保留；校验失败保留原文件。含公式的追加数据要求列顺序保持原位。静态checkpoint只导出新增测试点，每次运行使用独立事实目录，支持共用工作簿及重复运行。
 每个 CSV 与 XLSX 的 artifact kind 唯一。
 默认 console 与 tabular（仅 XLSX），显式 tabular 设置替换默认实例。summary 直接读取 Trial overall
 已存统计值，前置运行参数，末尾保留核心 maxtpm；全局分位数按正式指标导出。生成请求默认temperature=0.1、最多4,096 token并保留自然 EOS，显式参数优先（包括temperature=0）；Chat 显式配置 max_tokens=null 时省略默认输出上限，逐轮正整数目标继续优先，实际请求事实与画像的目标可为 null。固定输出仍要求显式目标。静态Prefill/Decode同样默认temperature=0.1，保留各自显式输出目标。

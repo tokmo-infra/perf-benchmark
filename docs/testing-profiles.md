@@ -1,24 +1,27 @@
-# Test profiles
+# 测试配置
 
-Use the short smoke profile for routine local checks:
+## 快速回归
 
-    scripts/test-smoke.sh
+日常本地检查使用快速回归脚本：
 
-It selects a small set of high-value checks for SWE tool-call normalization and
-replay, protocol end-to-end behavior, native request cleanup, partial/missing
-usage billing, Excel partial-value/append behavior, and run resource cleanup.
-The selected parametrizations currently collect **26 tests**. This is a fast
-signal, not a replacement for full coverage.
+```bash
+scripts/test-smoke.sh
+```
 
-Run the complete Python suite before a release or when changing a public
-contract, scheduler/lifecycle semantics, metrics formulas, or result storage:
+脚本覆盖 SWE 工具关联与回放、协议端到端行为、原生请求资源释放、
+部分及缺失 usage 的计费、Excel 部分值与追加写入，以及 Run 资源清理。
+快速回归用于检查关键路径，发布与公共契约变更使用完整测试集。
 
-    uv run pytest
+## 完整回归与专项验证
 
-For a focused change, run the affected module in addition to the smoke profile,
-for example `uv run pytest tests/normalization/` after normalization changes.
-Executor/Rust, frontend, real-service, and performance acceptance checks remain
-separate and should be run when their respective code or behavior changes.
+完整 Python 测试集的运行命令为：
 
-This only reduces the default *developer regression check*. It does not change
-any benchmark workload, selected sessions, concurrency, users, or sample count.
+```bash
+uv run pytest
+```
+
+发布，以及公共契约、调度与生命周期语义、指标公式或结果存储变更，均执行完整回归。
+局部功能变更同时执行受影响模块的测试，例如归一化变更执行 `uv run pytest tests/normalization/`。
+Executor/Rust、前端、真实服务和性能验收使用各自的专项验证流程，具体命令见[开发指南](development-guide.md)。
+
+测试配置决定开发回归的检查范围；压测负载、会话选择、并发、用户数和样本量由测试 YAML 独立配置。

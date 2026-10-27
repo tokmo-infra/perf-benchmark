@@ -3,12 +3,12 @@
 LLM 性能测试工具，支持五种 HTTP 协议、单轮与多轮、闭环与开环、并发扫描与 SLO 搜索。
 八阶段 Pipeline 将数据准备、请求执行、指标计算、SQLite 持久化和报告导出分离。
 实际服务 usage 生成 maxtpm、缓存命中和收入；缺失值保留未知。
-maxTPM 从首遍完成指定比例的轮次时开始，`metrics.settings.maxtpm_start_percent` 默认 40，表示 40%；实际请求并发连续 60 秒低于预设并发时，以这段下降的起点为终点，按区间内完整分钟统计。
+maxTPM 从首遍完成指定比例的轮次时开始，`pipeline.metrics.settings.maxtpm_start_percent` 默认 40，表示 40%；实际请求并发连续 60 秒低于预设并发时，以这段下降的起点为终点，按区间内完整分钟统计。YAML 配置、起点取值和动态终点见[统计区间指南](docs/user-guide.md#maxtpm-统计区间)。
 
 - [使用与部署指南](docs/user-guide.md)：安装、YAML、并发/用户池、数据、TPM/收入、CSV/Excel、Docker 与观测。
 - [静态 Prefill & Decode 压测指南](docs/static-benchmark-guide.md)：分词表随机抽取、输入长度与并发矩阵、复杂系统编程长文本、思考档位与 Excel 导出。
 - [开发指南](docs/development-guide.md)：模块职责、插件与 Hook、计时及存储契约、测试和代码提交范围。
-- 代表性示例：[静态 Prefill 与 Decode 压测](examples/static-benchmark.yaml)使用本地 tokenizer 生成输入；[静态固定并发](examples/source-only-openai.yaml)、[动态并发扫描与 SLO](examples/concurrency-sweep.yaml)、[多轮对话](examples/multi-turn.yaml)共用小样本，只用于检查请求流程。
+- 代表性示例：[静态 Prefill 与 Decode 压测](examples/static-benchmark.yaml)使用本地 tokenizer 生成输入；[静态固定并发](examples/source-only-openai.yaml)、[动态并发扫描与 SLO](examples/concurrency-sweep.yaml)、[多轮对话](examples/multi-turn.yaml)共用小样本，演示请求流程与配置方式。
 
 ```bash
 uv sync --locked --extra observation
@@ -29,7 +29,7 @@ uv run perf-benchmark run examples/source-only-openai.yaml
 
 Chat、Responses及静态Decode测试默认在正式测量前按 `max → xhigh → high` 选择服务接受的思考档位，并固定正式请求参数。显式思考配置优先；`null` 使用服务端设置。选择结果保存在运行证据和生成参数中，探测请求独立于正式性能统计，配置方式见使用指南的“默认思考档位”。
 
-配置里的ShareGPT小样本只用于检查请求流程，正式性能测试替换成自己的数据集。相对路径按YAML所在目录解析；`examples/source-only-openai.yaml` 的 `debug/results/source-only-001.db` 实际落在 `examples/debug/results/source-only-001.db`。
+配置里的 ShareGPT 小样本用于演示请求流程，正式性能测试使用目标数据集。相对路径按YAML所在目录解析；`examples/source-only-openai.yaml` 的 `debug/results/source-only-001.db` 实际落在 `examples/debug/results/source-only-001.db`。
 
 ## 共享数据集与样本数量
 
@@ -61,7 +61,7 @@ pipeline:
 | 换JSONL／Parquet／多轮数据 | `loader.settings.data_files`、`normalization.plugin`；使用指南第5节给出字段和格式 |
 | 指定服务、模型、生成参数 | `executor.settings.base_url/model/extra_body`；示例默认开启思考并按 max、xhigh、high 协商档位，生成默认最多4,096 token并保留自然 EOS，使用指南第3节 |
 | 改并发、用户池、速率或时长 | `scheduler.settings`；使用指南第4节包含固定并发、扫描和SLO搜索 |
-| 决定SQLite放在哪里 | `saver.settings.path`；使用指南第10节 |
+| 设置 SQLite 保存路径 | `saver.settings.path`；使用指南第10节 |
 | 导出HTML／CSV／Excel | 使用指南第7节；`report/export`读取已有 SQLite 或封存结果生成报告 |
 
 例如读取已有结果：
