@@ -1,6 +1,6 @@
 # perf-benchmark 使用与部署指南
 
-本文件介绍如何运行工具、切换测试模式和数据集。配置统一使用 **YAML**。
+本文件介绍工具运行、测试模式、数据集配置、指标统计和结果导出。配置统一使用 **YAML**。
 从第 2 节复制完整配置，再按服务地址、数据集和测试模式修改对应部分。
 
 ## 1. 安装、启动、指定配置
@@ -27,7 +27,7 @@ uv run perf-benchmark run /absolute/configs/run.yaml
 相对路径以 **YAML 所在目录** 为基准，家目录路径可以使用 `~`。
 每次运行填写一个新的 SQLite 文件路径。按 Ctrl-C 取消测试并等待结果收尾。
 
-各类测试默认在请求测量前，用最长2秒的只读HTTP探测记录服务KV的token容量；Excel的 `kv_capacity` 表保留每个独立GPU/CPU池、采集时间、来源及未知原因，summary列出可完整统计的总容量。TP分片不重复相加。SGLang支持server-info和HiCache总量；新版 `attn_dp_size` 表示独立attention池，`dp_size` 表示完整模型副本；当前自动采集支持单模型副本与独立attention池，多副本部署使用实测快照记录完整布局。vLLM的block预算单独标记，完整模型及LMCache容量缺少布局时保留未知。部署端实测快照可通过 `application.service_capacity.snapshot` 引用，格式见 [静态测试说明](static-benchmark-guide.md)。多服务路由应提供覆盖独立池与共享CPU池的部署快照。`application.service_capacity.enabled: false` 可关闭采集；`timeout_seconds` 可设置为大于0且不超过10秒。
+各类测试默认在请求测量前，用最长2秒的只读HTTP探测记录服务KV的token容量；Excel的 `kv_capacity` 表保留每个独立GPU/CPU池、采集时间、来源及未知原因，summary列出可完整统计的总容量。每个独立逻辑缓存池计一次容量。SGLang支持server-info和HiCache总量；新版 `attn_dp_size` 表示独立attention池，`dp_size` 表示完整模型副本；当前自动采集支持单模型副本与独立attention池，多副本部署使用实测快照记录完整布局。vLLM的block预算单独标记，完整模型及LMCache容量缺少布局时保留未知。部署端实测快照可通过 `application.service_capacity.snapshot` 引用，格式见 [静态测试说明](static-benchmark-guide.md)。多服务路由应提供覆盖独立池与共享CPU池的部署快照。`application.service_capacity.enabled: false` 可关闭采集；`timeout_seconds` 的取值范围为 `(0, 10]` 秒。
 
 容量快照包含 `model`、带时区的 `observed_at` 和 `pools`，可选 `engine` 取值为 `sglang`、`vllm` 或 `unknown`；省略时记录为 `unknown`。导入快照沿用其中的引擎标识、采集时间与池容量，直接用于报告。
 
@@ -35,7 +35,7 @@ SGLang的HiCache容量按server-info中的attention-DP拓扑归并；同一DP内
 
 ## 2. 一份可以直接修改的配置
 
-保存为仓库根目录 `my-run.yaml`，替换服务地址、模型和 tokenizer。`case` 必填，用一行说明本次测什么；它保存在原生事实中，并始终位于Excel首列。Excel冻结首列与标题行，首列按中英文字符宽度自适应（Excel列宽上限255）：
+保存为仓库根目录 `my-run.yaml`，替换服务地址、模型和 tokenizer。`case` 必填，用一行描述测试场景；它保存在原生事实中，并始终位于Excel首列。Excel冻结首列与标题行，首列按中英文字符宽度自适应（Excel列宽上限255）：
 
 ```yaml
 name: my-benchmark
@@ -88,7 +88,7 @@ uv run perf-benchmark run my-run.yaml
 此配置读取全部数据集会话，每会话只取第一轮，在途请求上限为 16，数据跑一遍后结束。实际并发取决于可用会话数。
 先用仓库样例跑通流程，正式性能测试换成足够大的数据集，并填写被测模型对应的 tokenizer。
 
-### 哪些必填、哪些选填
+### 必填字段与可选配置
 
 | 字段 | 要求 / 默认 |
 | --- | --- |
@@ -106,7 +106,7 @@ uv run perf-benchmark run my-run.yaml
 | `name`, `seed` | 选填；建议写清测试名和固定 seed（seed 默认 0） |
 | `stream` / `timeout_seconds` | 选填，默认 `true` / 300 秒；`timeout_seconds` 限制一次 HTTP 请求尝试的总耗时；使用 `stream: true` 测量 TTFT/ITL |
 | `extra_body` | 填 `temperature/top_p` 等请求参数；生成默认 `temperature: 0.1`、最多4,096 token并保留自然 EOS；生成方式见 3.1 |
-| `metrics.settings.maxtpm` | 选填，默认 `false`，启用首遍达到指定进度至持续并发不足前的完整分钟均值 |
+| `metrics.settings.maxtpm` | 选填，默认 `false`，启用首遍达到指定进度至实际并发持续低于目标值前的完整分钟均值 |
 | `metrics.settings.maxtpm_start_percent` | 选填，默认 `40`；首遍轮次起点百分比，数值范围 `[0, 100)`，支持小数，`0` 表示从测试观测起点开始 |
 | `metrics.settings.pricing` | 选填，填写后启用费用统计 |
 | `observation`, `logging`, `hooks` | 选填，按需启用监控、日志和扩展 |
@@ -184,9 +184,9 @@ dp_rank_count: 8
 | 主动限制最多输出 token 数 | 显式配置 `max_tokens: N` 或逐轮 `requested_output_tokens: N` | 遇到 EOS 可以提前结束，最多输出 N token |
 | 主动忽略 EOS 强制输出 | 指定正整数目标，并配置 `extra_body.ignore_eos: true`，或使用 `output_policy: fixed` 数据 | 忽略 EOS，生成到指定目标；仍受服务端上下文与其他停止条件影响 |
 
-默认生成上限为4,096 token，逐轮显式上限优先于配置上限，配置上限优先于默认值；实际输出数量以响应 usage 为准。参考输出长度不作为生成目标。
+默认生成上限为4,096 token，逐轮显式上限优先于配置上限，配置上限优先于默认值；实际输出数量以响应 usage 为准。参考输出长度用于数据画像，生成目标由请求参数指定。
 Chat 的显式 `max_tokens: null` 省略工具的默认输出上限；逐轮正整数 `requested_output_tokens` 继续优先。对应请求事实和画像中的输出目标为 null，响应 usage 记录实际生成数量。
-Chat、Completions、Responses的默认采样温度为 `temperature: 0.1`；显式 `extra_body.temperature` 和 Trial 请求参数优先，显式0同样保留。温度不保证终止生成，输出上限仍独立生效。Embedding/Rerank不发送采样温度。
+Chat、Completions、Responses的默认采样温度为 `temperature: 0.1`；显式 `extra_body.temperature` 和 Trial 请求参数优先，显式0同样保留。采样温度、输出上限和停止条件分别配置。采样温度用于 Chat、Completions 和 Responses 的生成请求，Embedding/Rerank 使用各自协议参数。
 
 **自然生成（默认）**：在 `executor.settings` 中填写采样参数即可：
 
@@ -296,7 +296,7 @@ scheduler:
 | --- | --- | --- |
 | 数据来源 | `selector.plugin: all` | 所有数据集对话模板，供运行时持续补充用户池 |
 | 用户池 / 同时激活会话上限 | `max_active_sessions: 128` | 池中最多 128 个未结束对话，包括等候请求名额的会话 |
-| 同时在途请求上限 | `max_concurrency: 32` | 同时发送且尚未结束的 HTTP 请求 |
+| 同时在途请求上限 | `max_concurrency: 32` | 同时处于执行中的 HTTP 请求 |
 | 运行时长 | `duration_s: 1200` | 到时停止准入，等待已发请求收尾；单请求超时另填 `timeout_seconds` |
 
 上例从数据集补入最多 128 个活跃对话，其中最多 32 个请求同时发送；
@@ -457,7 +457,7 @@ SLO 可以组合 `ttft/tpot/e2e/decode_throughput/success_rate/workload_total` �
 | --- | --- |
 | `boundary_confirmed` | 通过与失败边界已复测确认 |
 | `upper_limit_passed` | 配置的最高档复测通过 |
-| `indeterminate` | 当前指标或样本数量不足以判定 |
+| `indeterminate` | 判定所需的指标或样本量条件尚待满足 |
 | `unstable` | 复测结果波动或单调性冲突 |
 | `budget_exhausted` | 时间或 Trial 预算用尽 |
 
@@ -503,7 +503,7 @@ on_exhausted: stop
 | `executor.settings.timeout_seconds` | 单次 HTTP 请求尝试，从发起到响应结束，包含连接、等待首 token 和流式输出 | 该次请求记为超时失败；启用重试时，每次重试重新计时 |
 | `scheduler.settings.stop.duration_s` | 一个测试档位（一次 Trial）的发压时长；固定并发、固定速率、单轮和多轮模式都适用 | 停止准入新会话及发送后续请求，等待已经发出的请求收尾 |
 | `scheduler.settings.sweep.search.timeout_s` | 填正数限制整次自动 SLO 搜索，累计所有档位、重复与边界确认；填 `null` 由 SLO 边界或次数预算决定结束 | 秒数预算到时取消搜索及当前测试，结果标记为 `budget_exhausted` / `timeout` |
-| SLO 规则中的 `value: 60s` | 指标通过阈值，例如 TTFT p99 ≤ 60 秒 | 用于评价该档是否通过；请求执行时间由 `timeout_seconds` 控制 |
+| SLO 规则中的 `value: 60s` | 指标通过阈值，例如 TTFT p99 ≤ 60 秒 | 用于判定该档的 SLO 状态；请求执行时间由 `timeout_seconds` 控制 |
 
 例如，填写请求超时 300 秒、单档时长 600 秒、搜索预算 7200 秒：每个档位发压 10 分钟，
 一次请求最多执行 5 分钟，自动搜索累计最多运行 2 小时后进入取消收尾。
@@ -547,14 +547,14 @@ CSV/text/Arrow 文件填写对应的 loader 格式，并将列名整理为所选
 自己的多轮最小 JSONL（每行一个完整 JSON 对象）：
 
 ```json
-{"id":"user-1","conversations":[{"from":"human","value":"什么是缓存？"},{"from":"gpt","value":"缓存用于复用数据。"},{"from":"human","value":"举个例子。"},{"from":"gpt","value":"复用已经计算的前缀。"}]}
+{"id":"user-1","conversations":[{"from":"human","value":"介绍缓存的作用。"},{"from":"gpt","value":"缓存用于复用数据。"},{"from":"human","value":"举个例子。"},{"from":"gpt","value":"复用已经计算的前缀。"}]}
 ```
 
 在每个 `gpt` 消息填写 `requested_output_tokens` 可逐轮指定输出目标，例如 270、300、330；
 记录顶层的 `requested_output_tokens` 则统一指定整条会话。
 
 用 `sharegpt + multi_turn: true`。数据集里有多个 id 才形成多个用户模板；
-运行时用户池由 `max_active_sessions` 指定。一次回放时数据不足，实际池会更小；
+运行时用户池由 `max_active_sessions` 指定。一次回放的实际池大小取配置上限与可用会话数量中的较小值；
 `on_exhausted: cycle` 则可重用模板补充新会话。需要生成匹配 token 长度的随机/真实数据，
 用 `perf-benchmark dataset generate --help` 查询离线生成入口。
 
@@ -579,25 +579,30 @@ selector:
 
 ## 6. maxtpm 与每分钟收入
 
+统计参数位于 `pipeline.metrics.settings`，在现有 YAML 的 `pipeline` 中配置：
+
 ```yaml
-metrics:
-  plugin: standard
-  settings:
-    maxtpm: true
-    maxtpm_start_percent: 40 # 40 表示首遍完成 40% 轮次时开始统计。
-    pricing:
-      currency: CNY
-      per_tokens: 1000000
-      input_price: 2.0
-      output_price: 8.0
-      cached_input_price: 0.2
+pipeline:
+  metrics:
+    plugin: standard
+    settings:
+      maxtpm: true
+      maxtpm_start_percent: 40 # 首遍轮次完成比例，默认 40%。
+      pricing:
+        currency: CNY
+        per_tokens: 1000000
+        input_price: 2.0
+        output_price: 8.0
+        cached_input_price: 0.2
 ```
 
 按服务价格填写 `pricing`，上例为演示价格。同时填写 `maxtpm: true` 和 `pricing` 开启每分钟收入；省略整个 `pricing` 段关闭价格统计。
 三个价格必填且可为 0；`currency` 默认 USD，`per_tokens` 默认每百万 token。
 可选 `source` 填写非空的价目表来源或价格说明，作为冻结的计价依据保存到结果中。
 
-**maxtpm 口径**：`maxtpm_start_percent` 使用百分数数值，默认 `40`，范围 `[0, 100)`，支持小数。
+### maxTPM 统计区间
+
+`maxtpm_start_percent` 使用百分数数值，默认 `40`，范围 `[0, 100)`，支持小数。
 例如 `25` 表示 25%，`12.5` 表示 12.5%。选中数据集共有 T 轮请求，配置值为 P 时，
 首遍第 `ceil(T×P/100)` 轮完成时开始，按完成时间排序；`P=0` 从测试观测起点开始。
 从起点开始，使用调度器记录的实际在途请求数与 `target_concurrency` 比较。实际并发连续 60 秒低于预设并发时，
@@ -606,23 +611,25 @@ metrics:
 每个实际结束的轮次计一次进度（包括失败/取消），每个轮次的重试合并计一次进度；吞吐仅累计区间内首遍成功最终 Turn 的实际用量。
 在选定区间连续切分 60 秒窗口，
 按响应完成时刻归桶，TPM = 输入 token（包含缓存）+ 输出 token，均值是所有完整分钟的算术平均。
-零吞吐分钟也计入，最后不足 60 秒的一段剔除。
+零吞吐分钟也计入；尾部按实际时长记录，均值采用完整 60 秒窗口。
 Trial 收尾时按已记录的响应时间计算，SQLite 保存每分钟 `maxtpm:minute:000001` 等窗口及
 `maxtpm` 汇总，终端显示均值、分钟数和逐分钟表。
 同一 `maxtpm` 窗口也统计 TTFT、TPOT、E2E、ITL、prefill/decode 单请求速度，以及整体输出吞吐和成功请求数。
 这些延迟和速度只采用同窗内完成的首遍成功最终 Turn，包含窗口前发出、窗口内完成的请求，
 排除窗口内发出但窗口后完成的请求、失败请求、重试 Attempt 和循环 Session。
-延迟取完整请求的真实时间，不截断到窗口边界；均值和分位数从全部合格样本合并计算，不对各分钟的分位数取平均。
+延迟取完整请求的真实时间；均值和分位数从同窗全部合格请求的完整测量样本合并计算。
 Excel summary 的 `maxtpm_ttft_*`、`maxtpm_tpot_*`、`maxtpm_e2e_*`、`maxtpm_prefill_throughput_*`、
 `maxtpm_decode_throughput_*` 等列列出 mean/P50/P90/P99、有效样本 n 和合格请求数 eligible_n；
 `maxtpm_workload_completion` 为同窗总输出 token/s，区别于单请求 decode tok/s。完整统计及缺失原因保存在原生 SQLite / 同身份 Parquet 中。
 缺少完整分钟时，这些窗口指标保留 unavailable；非流式、单 token 或缺少输出事件等情况沿用各指标的有效样本与缺失原因。
 运行结果在首遍达到配置的起点比例、并发观测可用、区间内包含完整分钟且 usage 有效时显示数值，其余情况显示 `unavailable`。
 进度按首遍全部轮次完成数量计算；循环测试沿用首遍轮次定位起点及限定统计队列。
-测试继续执行到配置的结束条件，maxTPM 区间选择只影响统计。全局 summary 指标沿用整体窗口。
+测试执行由 `scheduler.settings.stop` 及数据耗尽规则控制；maxTPM 区间用于吞吐、收入和同窗性能统计，全局 summary 指标使用整体窗口。
 SQLite / 同身份 Parquet 保存 `maxtpm_start_percent`、起点比例、实际边界轮数和时间戳、目标并发、持续下降的确认时刻及结束原因；CSV/Excel 分钟表保存实际完整窗口。
 
-**每分钟收入**：对上面每个完整分钟的成功请求，按服务返回的实际 token 用量计算：
+### 每分钟收入
+
+对上面每个完整分钟的成功请求，按服务返回的实际 token 用量计算：
 
 ```text
 每分钟收入 = ((输入 token − 缓存命中 token) × input_price
@@ -639,10 +646,10 @@ summary 在总收入旁列出三项计费贡献：`cached_input_revenue_per_minu
 输入按服务 usage 的 `prompt_tokens - cached_tokens` 计算，缓存按 `cached_tokens` 计算，
 输出按 `completion_tokens` 计算。这些数值表示计费贡献，GPU实际prefill和decode工作由性能指标与引擎采样描述。
 这里的收入表示配置销售单价对应的 token 收入。
-收入数值列不会因整列缺失而被省略；缺失用量仍保留为空，并写明原因，不当作零。
-带 `*` 的数值表示部分观测，或经过独立验收的有效请求子集；Excel 保持底层数值类型，
-不增加过滤专用列。子集收入必须保留原 maxTPM 窗口与时长，三项使用同一有效请求集合，
-不外推至全量。覆盖率、剔除原因与原始 SHA 保存在验收证据中，不改写原生结果。
+收入数值列始终保留，观测缺失的用量以空白及原因表示，实际观测到的零用量以数值 0 表示。
+带 `*` 的数值表示部分观测，或经过独立验收的有效请求子集；Excel 沿用现有收入列与底层数值类型。
+子集收入使用原 maxTPM 窗口、时长和同一有效请求集合，数值表示该子集的收入。
+覆盖率、剔除原因与原始 SHA 保存在独立验收证据中，原生结果按原记录保存。
 
 | 字段 | 结果含义 |
 |---|---|
@@ -657,7 +664,7 @@ summary 在总收入旁列出三项计费贡献：`cached_input_revenue_per_minu
 | `maxtpm_minutes` | 纳入均值的完整分钟数 |
 
 Excel/CSV 中的 `maxtpm` 按 **百万 token/分钟** 展示（单位 `百万token/M`，M 指分钟），
-数值为原生 maxTPM 除以 1,000,000。数据库中的统计值、原窗口及收入计算不变；
+数值为原生 maxTPM 除以 1,000,000。数据库保留原生 token/分钟值，窗口和收入按原生规则计算；
 其他输入/输出速率继续按各列明确标注的单位读取。
 
 **vLLM / SGLang 用量采集**：`openai-chat` 读取每次响应的 `usage.prompt_tokens`、
@@ -739,7 +746,7 @@ exporter:
 ```
 
 `output` 填输出目录，相对路径按 YAML 所在目录解析；`formats` 可填 `[csv]`、`[xlsx]` 或两者。
-可另设 `excel_path: results/glm-comparison.xlsx` 指定Excel文件路径。文件不存在时创建；已存在时，同名子表按完整列名对齐后追加本次Run的数据。原有列顺序和历史行保留，新指标列追加到末尾，各次测试缺失的指标保持空白。列名中的单位参与匹配，单位不同的指标分别保存。首列标题须一致，所有标题须为唯一的非空文本；校验失败时原文件保留。缺少的子表自动创建，其余子表保留。数值类型、部分可用标记和单元格样式沿用原生导出。该设置只控制Excel，CSV仍写到 `output`。
+可另设 `excel_path: results/glm-comparison.xlsx` 指定Excel文件路径。首次导出创建文件；追加导出时，同名子表按完整列名对齐后追加本次Run的数据。原有列顺序和历史行保留，新指标列追加到末尾，各次测试缺失的指标保持空白。列名中的单位参与匹配，单位不同的指标分别保存。首列标题须一致，所有标题须为唯一的非空文本；校验失败时原文件保留。缺少的子表自动创建，其余子表保留。数值类型、部分可用标记和单元格样式沿用原生导出。该设置只控制Excel，CSV仍写到 `output`。
 
 静态 Prefill、Decode 和多轮对话可以共用一个工作簿：把静态配置的 `output.excel_path` 与多轮配置中 `pipeline.exporter.plugins` 列表内 tabular 的 `settings.excel_path` 指向同一个文件。静态结果写入 `Prefill性能测试`、`Decode性能测试` 等子表；多轮结果写入 `summary`、`minutes`、`requests`，采集服务容量时另附 `kv_capacity`。每次导出在文件锁内校验并原子追加，case 标识各次测试。相对路径分别以各自 YAML 所在目录解析。
 
@@ -754,7 +761,7 @@ exporter:
 默认只导出 Excel；显式填写 `[csv, xlsx]` 会同时生成 `summary.csv`、`minutes.csv`、`requests.csv`，采集服务容量时另附 `kv_capacity.csv`，可以同 HTML 导出器一起配置。
 
 常规性能测试建议保持 `exporter: {}`，保存原生 SQLite/Parquet 与一份 Excel。
-HTML 和 CSV 可以通过 `report`、`export` 在需要时生成，避免每次重复保存完整明细。
+HTML 和 CSV 通过 `report`、`export` 按需从已保存的原生结果生成。
 已结束测试可以先预览精简清单，再执行：
 
 ```bash
@@ -764,7 +771,7 @@ uv run perf-benchmark results compact --root /absolute/results --apply
 
 该命令验证终态数据库和保留的 Excel，移除可重导出的 `report.html`、`summary.csv`、`minutes.csv`、`requests.csv` 及旧版 `metrics.csv`；
 相同 `selected.jsonl` 按 SHA256 共享硬链接，原加载路径保持可用。SQLite/Parquet、配置、
-Excel 和历史明文日志保留。活动 case、非空 WAL、无法验证的结果会跳过。
+Excel 和历史明文日志保留。精简对象限于已结束、WAL 为空且通过完整性验证的结果。
 封存清单及同步回执随精简记录更新，明细仍遵守七天保留规则。
 仅显式添加 `--compress-metrics` 才将已关闭的指标观测日志无损压缩为 gzip。
 
@@ -810,13 +817,13 @@ recorded 回放使用数据中的下一份完整上下文；live continuation �
 
 `open-swe-traces` 使用空的 normalization `settings: {}`，直接采用录制请求上下文。
 将第 2 节的 normalization 改为 `plugin: open-swe-traces`、`settings: {}`，并指定轨迹数据文件。
-准备只构造每轮完整请求，
+准备阶段构造每轮完整请求，
 完整保留录制上下文、reasoning 和工具声明；请求长度处理交给服务端，超长请求失败如实保存。
 默认最多生成4,096 token并保留自然 EOS；显式声明的正整数 `requested_output_tokens` 按原值发送。
-数据集预计算输入/输出计数仅作参考估算，跨模型可能不同；实测吞吐和收入始终采用服务端响应 usage。
+数据集预计算输入/输出计数用于描述参考分词器下的数据画像；实测吞吐和收入采用服务端响应 usage。
 
-部分 SWE 轨迹的 `tool` 结果没有 `tool_call_id`，严格的 Router 可能在转发前拒绝请求。
-默认 `missing_tool_call_id: preserve` 保持原样；针对已验证聊天模板的部署，可显式配置：
+`tool` 结果通过 `tool_call_id` 关联前一条 assistant 的工具调用。
+默认 `missing_tool_call_id: preserve` 沿用数据中的关联字段；要求字符串占位字段的协议解析器可配置：
 
 ```yaml
 normalization:
@@ -879,7 +886,7 @@ perf计费采用响应usage与客户端完成时间队列，Prometheus原始采�
 TTFT、请求延迟与整体输出吞吐参考[NVIDIA GenAI-Perf](https://github.com/triton-inference-server/perf_analyzer/blob/main/genai-perf/README.md)的客户端口径。
 [vLLM基准实现](https://github.com/vllm-project/vllm/blob/main/vllm/benchmarks/lib/endpoint_request_func.py)将末输出事件作为latency终点，
 对应本工具的`time_to_last_output`；本工具E2E另包含响应收尾，`response_drain`保存该段时间。maxTPM采用本工具明确约定的
-首遍可配置进度起点（默认40%）、持续60秒并发不足的动态终点和完整分钟均值；跨窗口请求的整条usage归入完成时刻，原始事件和监控采样保留各自时间身份。
+首遍可配置进度起点（默认40%）、并发连续60秒低于目标值的动态终点和完整分钟均值；跨窗口请求的整条usage归入完成时刻，原始事件和监控采样保留各自时间身份。
 
 ## 9. 离线数据与实验
 
@@ -932,7 +939,7 @@ compare 检查数据、筛选、tokenizer、seed、协议、生成、部署和�
 | `examples/multi-turn.yaml` | `examples/debug/results/multi-turn-001.db` | `examples/debug/results/multi-turn-001-tables/results.xlsx` |
 
 SQLite 保存请求事实、指标及必要元数据；请求正文使用生命周期内的临时存储，鉴权来自环境变量。
-requests 表格通常比 summary 大，实际大小取决于 Attempt 数；原始指标不再重复导出到表格。汇总用量时选择
+requests 表格保存 Attempt 和最终 Turn 明细，行数随实际请求数量增长；完整原始指标保存在 SQLite / 同身份 Parquet。汇总用量时选择
 requests 中的 attempt 或 turn 一种 scope。运行中的事实写入 SQLite，收尾后封存 Parquet；
 统一 ResultReader 自动路由结果，派生 CSV/XLSX 可按需重导出。
 
@@ -978,11 +985,11 @@ Host/Origin 和 WebSocket 转发必须一致；修改端口时同步修改 `WORK
 
 Docker 方案包含三类进程：
 
-| 组件 | 做什么 | 是否常驻 |
+| 组件 | 职责 | 运行方式 |
 | --- | --- | --- |
-| `perf-observation` | Alloy、Prometheus、Tempo、Loki、Pyroscope、Grafana | 是 |
-| `perf-benchmark` | 进入后手动执行 `perf-benchmark run` 的工具箱 | 是，手动启动测试 |
-| `results` | 为 Grafana 提供 SQLite 只读查询 | 是 |
+| `perf-observation` | Alloy、Prometheus、Tempo、Loki、Pyroscope、Grafana | 常驻服务 |
+| `perf-benchmark` | 进入后手动执行 `perf-benchmark run` 的工具箱 | 工具箱常驻，测试按命令启动 |
+| `results` | 为 Grafana 提供 SQLite 只读查询 | 常驻服务 |
 
 ### 12.1 宿主机前置
 
@@ -1131,7 +1138,7 @@ kernel 累计耗时用于算子诊断，墙钟 GPU 利用率取自相应采样�
 导入器 `python -m perf_benchmark.app.nsight --help` 校验版本、单位与全部报告后向 Loki 提交摘要。
 完整原始报告保存在外部 artifact，Benchmark SQLite 只记录关联。
 
-导出 XLSX 时，数据行只读取一次；精确列宽随写入计算，当前工作表 XML 暂存到临时文件，避免为列宽再次读取和解析全部请求。此优化不改变原始指标、缺失原因、收入星号或 maxTPM 单位。
+XLSX 导出使用单次流式读取，写入时同步计算精确列宽，当前工作表 XML 使用临时文件存储。指标值、缺失原因、收入星号和 maxTPM 单位均读取已保存的原生结果。
 
 ## 14. 示例选择与排错
 
@@ -1144,8 +1151,8 @@ kernel 累计耗时用于算子诊断，墙钟 GPU 利用率取自相应采样�
 | [`concurrency-sweep.yaml`](../examples/concurrency-sweep.yaml) | 动态扫描多个并发档位，逐档判断 SLO；修改 `sweep.values`、`slo.rules` 和 `stop` |
 | [`multi-turn.yaml`](../examples/multi-turn.yaml) | 完整多轮会话，分别配置活跃用户数与请求并发；`live_continuation` 决定回放记录或使用实际生成回复 |
 
-运行前修改服务、模型、tokenizer、数据集及结果路径；每次使用新的数据库文件名。动态示例的少量样本
-只用于检查流程，正式压测需要足够的数据量和测试时长。将动态示例的 `sweep.values` 替换为第 4.6 节的
+运行前修改服务、模型、tokenizer、数据集及结果路径；每次使用新的数据库文件名。动态示例的小样本演示请求流程，
+正式压测按目标并发和统计窗口准备数据量及测试时长。将动态示例的 `sweep.values` 替换为第 4.6 节的
 `sweep.search` 可搜索满足 SLO 的最大并发；多轮示例也可配置同样的扫描或搜索。
 
 并发、用户池、扫描与 SLO 搜索见第 4 节；数据集见第 5 节，计费与 maxtpm 见第 6 节，
