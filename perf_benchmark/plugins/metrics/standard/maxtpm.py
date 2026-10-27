@@ -3,9 +3,11 @@
 from dataclasses import replace
 from itertools import groupby
 from decimal import Decimal
+import math
 from perf_benchmark.plugins.metrics.standard.catalog import METRIC_CATALOG
 
 MINUTE_NS = 60_000_000_000
+FORMULA_VERSION = "dataset-turn-maxtpm-v7-configurable-start-underfill-60s-first-pass"
 TOKEN_NAMES = (
     "maxtpm",
     "maxtpm_input_tpm",
@@ -21,6 +23,13 @@ REVENUE_NAMES = (
 )
 LATENCY_NAMES = ("ttft", "tpot", "e2e", "itl", "prefill_throughput", "decode_throughput",
                  "time_to_last_output", "response_drain", "input_tokens", "output_tokens")
+
+
+def parse_start_percent(value):
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not 0 <= value < 100 or not math.isfinite(value)):
+        raise ValueError("metrics maxtpm_start_percent must be finite and in [0, 100)")
+    return float(value)
 
 
 def latency_points(backend, trial, start, minutes, session_count, reason):
@@ -153,7 +162,9 @@ def _concurrency_end(rows, start, end, target):
 def dataset_maxtpm(backend, fact, bounds, occupancy):
     trial = fact.trial_id
     count = fact.scheduling.dataset_turn_count
-    lower = (2 * count + 4) // 5 if count else None
+    percent = parse_start_percent(backend.settings.get("maxtpm_start_percent", 40))
+    numerator, denominator = (Decimal(str(percent)) / 100).as_integer_ratio()
+    lower = (count * numerator + denominator - 1) // denominator if count else None
     target = fact.load_profile.target_concurrency
     start = end_boundary = None
     confirmed_ns = end_reason = None
@@ -161,7 +172,7 @@ def dataset_maxtpm(backend, fact, bounds, occupancy):
     reason = "dataset_size_not_reported"
     pricing = backend.billing.pricing
     names = (*TOKEN_NAMES, "maxtpm_cache_hit_rate", *(REVENUE_NAMES if pricing else ()))
-    if lower:
+    if count:
         row = backend._one(
             "SELECT count(*), max(completed_ns) FILTER (WHERE position=?), "
             "max(completed_ns) FROM ("
@@ -174,16 +185,19 @@ def dataset_maxtpm(backend, fact, bounds, occupancy):
             ")",
             [lower, trial, fact.scheduling.dataset_session_count],
         )
-        if row[0] >= lower:
+        if lower == 0:
+            start = bounds[0]
+        elif row[0] >= lower:
             start = int(row[1])
         if start is None:
-            reason = "dataset_40_percent_not_completed"
+            reason = "dataset_start_percent_not_completed"
         elif target is None:
             reason = "target_concurrency_not_configured"
         else:
             # Keep repeated sessions and post-first-pass cleanup out of the horizon.
             # Cancelled Turns can finish after their last transport timestamp.
-            end = int(row[2]) + 1 if row[0] >= count else max(bounds[1], int(row[2]) + 1)
+            terminal_end = int(row[2]) + 1 if row[2] is not None else bounds[1]
+            end = terminal_end if row[0] >= count else max(bounds[1], terminal_end)
             end_boundary, confirmed_ns, end_reason = _concurrency_end(occupancy, start, end, target)
             reason = end_reason if end_boundary is None else None
             if end_boundary is not None:
@@ -222,7 +236,7 @@ def dataset_maxtpm(backend, fact, bounds, occupancy):
             unit=pricing["currency"] + "/min"
             if name in REVENUE_NAMES
             else METRIC_CATALOG[name].unit,
-            formula_version="dataset-turn-maxtpm-v6-40pct-underfill-60s-first-pass",
+            formula_version=FORMULA_VERSION,
         )
 
     if minutes:
@@ -295,7 +309,8 @@ def dataset_maxtpm(backend, fact, bounds, occupancy):
         "maxtpm_dataset_sessions": fact.scheduling.dataset_session_count,
         "maxtpm_dataset_turns": count,
         "maxtpm_progress_basis": "first_pass_terminal_turns",
-        "maxtpm_progress_start_fraction": 0.4,
+        "maxtpm_start_percent": percent,
+        "maxtpm_progress_start_fraction": percent / 100,
         "maxtpm_end_basis": "first_continuous_60s_below_target_concurrency",
         "maxtpm_target_concurrency": target,
         "maxtpm_underfill_grace_s": 60,

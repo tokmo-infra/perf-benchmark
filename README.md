@@ -3,7 +3,7 @@
 LLM 性能测试工具，支持五种 HTTP 协议、单轮与多轮、闭环与开环、并发扫描与 SLO 搜索。
 八阶段 Pipeline 将数据准备、请求执行、指标计算、SQLite 持久化和报告导出分离。
 实际服务 usage 生成 maxtpm、缓存命中和收入；缺失值保留未知。
-maxTPM 从首遍完成 40% 轮次时开始；实际请求并发连续 60 秒低于预设并发时，以这段下降的起点为终点，按区间内完整分钟统计。
+maxTPM 从首遍完成指定比例的轮次时开始，`metrics.settings.maxtpm_start_percent` 默认 40，表示 40%；实际请求并发连续 60 秒低于预设并发时，以这段下降的起点为终点，按区间内完整分钟统计。
 
 - [使用与部署指南](docs/user-guide.md)：安装、YAML、并发/用户池、数据、TPM/收入、CSV/Excel、Docker 与观测。
 - [静态 Prefill & Decode 压测指南](docs/static-benchmark-guide.md)：分词表随机抽取、输入长度与并发矩阵、复杂系统编程长文本、思考档位与 Excel 导出。

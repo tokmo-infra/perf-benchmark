@@ -10,6 +10,7 @@ from perf_benchmark.plugins.metrics.standard.catalog import (
 from perf_benchmark.plugins.metrics.standard.windows import WINDOW_ORDER
 from perf_benchmark.plugins.metrics.standard.backend import StandardMetricsBackend
 from perf_benchmark.plugins.metrics.standard.billing import parse_pricing
+from perf_benchmark.plugins.metrics.standard.maxtpm import parse_start_percent
 from perf_benchmark.pipeline.scheduling.sweep import threshold
 
 
@@ -49,7 +50,7 @@ def _parse_goodput(value: object) -> dict:
 
 
 def parse_settings(settings: dict) -> dict:
-    unknown = set(settings) - {"memory_limit", "temp_directory", "steady", "goodput", "maxtpm", "pricing"}
+    unknown = set(settings) - {"memory_limit", "temp_directory", "steady", "goodput", "maxtpm", "maxtpm_start_percent", "pricing"}
     if unknown:
         raise ValueError(f"unknown standard metrics setting: {sorted(unknown)[0]}")
     memory = settings.get("memory_limit", "512MB")
@@ -86,6 +87,7 @@ def parse_settings(settings: dict) -> dict:
     if not isinstance(maxtpm, bool):
         raise ValueError("metrics maxtpm must be boolean")
     parsed["maxtpm"] = maxtpm
+    parsed["maxtpm_start_percent"] = parse_start_percent(settings.get("maxtpm_start_percent", 40))
     if "pricing" in settings:
         parsed["pricing"] = parse_pricing(settings["pricing"])
     return parsed

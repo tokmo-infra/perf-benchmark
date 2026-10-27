@@ -561,7 +561,7 @@ async def test_sqlite_csv_excel_export_same_minute_revenue_and_request_usage(
     assert float(summary["maxtpm"]) == pytest.approx(.000055)
     assert summary["maxtpm_unit"] == '百万token/M'
     native = reader.metric_points(run.id, scope="trial", scope_id=tr.id, window="maxtpm")
-    assert native["maxtpm"]["formula_version"] == "dataset-turn-maxtpm-v6-40pct-underfill-60s-first-pass"
+    assert native["maxtpm"]["formula_version"] == "dataset-turn-maxtpm-v7-configurable-start-underfill-60s-first-pass"
     assert native["decode_throughput"]["statistics"]["time_wm"] == 9
     assert float(summary["maxtpm_decode_throughput_time_weighted_mean"]) == 9
     assert float(summary["revenue_per_minute"]) == pytest.approx(0.1175)

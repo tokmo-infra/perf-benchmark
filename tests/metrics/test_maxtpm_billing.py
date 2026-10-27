@@ -103,6 +103,128 @@ def occupancy(*rows):
     return tuple(OccupancyFact("trial", "in_flight", stamp * NANO, value) for stamp, value in rows)
 
 
+@pytest.mark.parametrize("value", [
+    True, False, None, "40", {}, [], -1, 100, 101, 10**1000,
+    float("nan"), float("inf"), float("-inf"),
+])
+def test_maxtpm_start_percent_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="maxtpm_start_percent"):
+        parse_settings({"maxtpm_start_percent": value})
+
+
+def test_maxtpm_start_percent_yaml_and_default():
+    import yaml
+
+    config = yaml.safe_load("""
+pipeline:
+  metrics:
+    plugin: standard
+    settings:
+      maxtpm: true
+      maxtpm_start_percent: 12.5
+""")
+    parsed = parse_settings(config["pipeline"]["metrics"]["settings"])
+    assert parsed["maxtpm"] is True
+    assert parsed["maxtpm_start_percent"] == 12.5
+    assert parse_settings({})["maxtpm_start_percent"] == 40
+    assert parse_settings({})["maxtpm"] is False
+
+
+@pytest.mark.parametrize("percent,start_turns,start_s,minutes,tpm", [
+    (0, 0, 1, 2, 300),
+    (0.1, 1, 10, 2, 300),
+    (25, 3, 30, 2, 250),
+    (40, 4, 40, 2, 200),
+    (50, 5, 60, 1, 200),
+    (60, 6, 100, 1, 200),
+    (80, 8, 180, 0, None),
+])
+def test_maxtpm_configurable_start_uses_same_concurrency_cutoff_and_cohort(
+    percent, start_turns, start_s, minutes, tpm
+):
+    backend = StandardMetrics(parse_settings({
+        "maxtpm": True, "maxtpm_start_percent": percent, "pricing": PRICES,
+    })).create_backend(seed=0)
+    backend.open()
+    try:
+        backend.consume((session(0, 301), *occupancy((1, 192), (175, 191)),
+            *(turn(str(i), stamp, prompt=90, completion=10, cached=25)
+              for i, stamp in enumerate((10, 20, 30, 40, 60, 100, 140, 180, 240, 300)))))
+        report = backend.finalize_trial(replace(trial(10), load_profile=LoadProfile(
+            "test", target_concurrency=192, max_active_sessions=384,
+        )))
+        diagnostics = report.diagnostics
+        assert diagnostics["maxtpm_start_percent"] == percent
+        assert diagnostics["maxtpm_progress_start_fraction"] == percent / 100
+        assert diagnostics["maxtpm_start_turns"] == start_turns
+        assert diagnostics["maxtpm_start_ns"] == start_s * NANO
+        cutoff = max(start_s, 175)
+        assert diagnostics["maxtpm_end_ns"] == cutoff * NANO
+        assert diagnostics["maxtpm_underfill_confirmed_ns"] == (cutoff + 60) * NANO
+        assert diagnostics["maxtpm_end_reason"] == "concurrency_under_target_60s"
+        summary = by_name(report.points, "maxtpm")
+        assert summary["maxtpm_minutes"].value == minutes
+        assert summary["maxtpm"].value == tpm
+        assert by_name(report.points)["succeeded"].value == 10
+        if minutes:
+            assert summary["maxtpm_cache_hit_rate"].value == pytest.approx(25 / 90)
+            assert summary["maxtpm_input_tpm"].value == pytest.approx(tpm * .9)
+            assert summary["maxtpm_output_tpm"].value == pytest.approx(tpm * .1)
+            assert summary["revenue_per_minute"].value == pytest.approx(tpm * .00215)
+            succeeded = next(p.value for p in report.points if p.window == "maxtpm"
+                             and p.metric == "succeeded" and p.statistic == "value")
+            assert succeeded == tpm * minutes / 100
+        else:
+            assert summary["maxtpm"].unavailable_reason == "no_complete_minute_in_maxtpm_window"
+    finally:
+        backend.close()
+
+
+@pytest.mark.parametrize("percent,count,expected", [
+    (28, 25, 7), (12.5, 9, 2), (40, 6, 3), (99.9, 10, 10), (0, 9, 0),
+])
+def test_maxtpm_start_percent_rounds_up_exact_decimal_progress(percent, count, expected):
+    backend = StandardMetrics({"maxtpm": True, "maxtpm_start_percent": percent}).create_backend(seed=0)
+    backend.open()
+    try:
+        backend.consume((session(0, 300), *occupancy((1, 1)),
+                         *(turn(str(i), 10 * (i + 1)) for i in range(count))))
+        report = backend.finalize_trial(trial(count))
+        assert report.diagnostics["maxtpm_start_turns"] == expected
+        assert report.diagnostics["maxtpm_start_ns"] == (10 * expected if expected else 1) * NANO
+    finally:
+        backend.close()
+
+
+def test_maxtpm_default_matches_explicit_40_percent():
+    reports = []
+    for settings in ({"maxtpm": True}, {"maxtpm": True, "maxtpm_start_percent": 40}):
+        backend = StandardMetrics(parse_settings(settings)).create_backend(seed=0)
+        backend.open()
+        try:
+            backend.consume((session(0, 300), *occupancy((1, 1)),
+                             *(turn(str(i), stamp) for i, stamp in enumerate((10, 20, 80, 140)))))
+            reports.append(backend.finalize_trial(trial(4)))
+        finally:
+            backend.close()
+    assert reports[0] == reports[1]
+
+
+def test_maxtpm_custom_start_is_unavailable_until_configured_progress():
+    backend = StandardMetrics({"maxtpm": True, "maxtpm_start_percent": 80}).create_backend(seed=0)
+    backend.open()
+    try:
+        backend.consume((session(0, 300), *occupancy((1, 1)),
+                         turn("one", 10), turn("two", 20)))
+        report = backend.finalize_trial(trial(10))
+        assert report.diagnostics["maxtpm_start_turns"] == 8
+        assert report.diagnostics["maxtpm_start_ns"] is None
+        assert by_name(report.points, "maxtpm")["maxtpm"].unavailable_reason == "dataset_start_percent_not_completed"
+        assert by_name(report.points)["succeeded"].value == 2
+    finally:
+        backend.close()
+
+
 @pytest.mark.parametrize("rows,start,end,expected,confirmed,reason", [
     ([(1, 192), (100, 191), (160, 192)], 20, 300, 100, 160, "concurrency_under_target_60s"),
     ([(1, 192), (100, 191), (159, 192), (200, 191)], 20, 300, 200, 260, "concurrency_under_target_60s"),
@@ -301,15 +423,15 @@ def test_maxtpm_starts_at_40_percent_and_ends_at_sustained_underfill_with_zero_m
         assert "maxtpm_progress_end_fraction" not in report.diagnostics
         assert report.diagnostics["maxtpm_underfill_confirmed_ns"] == 215 * NANO
         assert report.diagnostics["maxtpm_end_reason"] == "concurrency_under_target_60s"
-        assert summary["maxtpm"].formula_version == "dataset-turn-maxtpm-v6-40pct-underfill-60s-first-pass"
+        assert summary["maxtpm"].formula_version == "dataset-turn-maxtpm-v7-configurable-start-underfill-60s-first-pass"
     finally:
         backend.close()
 
 
 @pytest.mark.parametrize("count,turns,reason", [
     (None, (), "dataset_size_not_reported"),
-    (4, (), "dataset_40_percent_not_completed"),
-    (4, (turn("one", 10),), "dataset_40_percent_not_completed"),
+    (4, (), "dataset_start_percent_not_completed"),
+    (4, (turn("one", 10),), "dataset_start_percent_not_completed"),
     (2, (turn("one", 10), turn("two", 30)), "no_complete_minute_in_maxtpm_window"),
     (1, (turn("one", 10),), "no_complete_minute_in_maxtpm_window"),
 ])
