@@ -52,13 +52,14 @@ class RustHttpExecutorRuntime(RequestRuntime):
             if self.native is None or self._close_task is not None:
                 raise RuntimeError("Rust runtime is not open")
             spec = prepared.spec
+            timeout = self.settings.get("timeout_seconds", 300)
             handle = self.native.submit(prepared.native_body, {
                 "url": spec.url, "method": spec.method,
                 "notify_start": signal.started_callback is not None,
                 "expectations": spec.response_expectations,
                 "headers": {"Content-Type": prepared.body.content_type, **spec.headers},
                 "body_length": prepared.body.content_length, "stream": spec.streaming,
-                "retain": spec.retain_output, "timeout": self.settings.get("timeout_seconds", 300),
+                "retain": spec.retain_output, "timeout": 0.0 if timeout is None else timeout,
                 "plan": asdict(signal.plan),
                 "session_id": prepared.input.session.id,
                 "connection_scope": self.settings.get("connection_scope", "session"),

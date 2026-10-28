@@ -1,4 +1,5 @@
 import asyncio
+import math
 import orjson
 from copy import deepcopy
 from urllib.parse import urlsplit
@@ -86,8 +87,9 @@ def validate(settings):
         if not isinstance(value, bool):
             raise TypeError(f"{name} must be a boolean")
     timeout = parsed.setdefault("timeout_seconds", 300.0)
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
-        raise ValueError("timeout_seconds must be positive")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                                or timeout <= 0 or not math.isfinite(timeout)):
+        raise ValueError("timeout_seconds must be finite and positive, or null")
     headers = parsed.setdefault("extra_headers", {})
     validate_extra_headers(headers)
     validate_api_keys(parsed)

@@ -226,3 +226,80 @@ async fn peer_disconnect_preserves_transport_stage_and_underlying_error() {
         http.close().await;
     }
 }
+
+// Disabling the total deadline preserves explicit cancellation.
+async fn delayed_with_timeout(
+    timeout: f64,
+    cancel_after: Option<u64>,
+) -> perf_rusthttp::types::Outcome {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut h = Vec::new();
+        while !h.ends_with(b"\r\n\r\n") {
+            h.push(sock.read_u8().await.unwrap());
+        }
+        let first = b"data: x\n\n";
+        sock.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+                first.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .ok();
+        sock.write_all(first).await.ok();
+        sock.write_all(b"\r\n").await.ok();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let last = b"data: [DONE]\n\n";
+        sock.write_all(format!("{:x}\r\n", last.len()).as_bytes())
+            .await
+            .ok();
+        sock.write_all(last).await.ok();
+        sock.write_all(b"\r\n0\r\n\r\n").await.ok();
+    });
+    let cmd = Command {
+        url: format!("http://{address}"),
+        method: "POST".into(),
+        connection_scope: "request".into(),
+        timeout,
+        stream: true,
+        ..Default::default()
+    };
+    let cancel = CancellationToken::new();
+    if let Some(ms) = cancel_after {
+        let c = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            c.cancel();
+        });
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        Http::default().execute(&cmd, vec![], Box::new(Slow), cancel, None, tx),
+    )
+    .await
+    .expect("request or cancellation must settle within the test bound");
+    let out = rx.await.unwrap();
+    server.abort();
+    out
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_total_timeout_completes_delayed_stream() {
+    let out = delayed_with_timeout(0., None).await;
+    assert_eq!(out.status, "succeeded");
+    assert_eq!(out.samples.len(), 1);
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn positive_total_timeout_is_still_enforced() {
+    let out = delayed_with_timeout(0.05, None).await;
+    assert_eq!(out.error.as_deref(), Some("TimeoutError"));
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_total_timeout_remains_cancellable() {
+    let out = delayed_with_timeout(0., Some(70)).await;
+    assert_eq!(out.status, "cancelled");
+}

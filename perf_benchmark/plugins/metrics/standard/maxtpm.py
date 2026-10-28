@@ -7,7 +7,7 @@ import math
 from perf_benchmark.plugins.metrics.standard.catalog import METRIC_CATALOG
 
 MINUTE_NS = 60_000_000_000
-FORMULA_VERSION = "dataset-turn-maxtpm-v7-configurable-start-underfill-60s-first-pass"
+FORMULA_VERSION = "dataset-turn-maxtpm-v8-auto-start-1p5x-underfill-60s-first-pass"
 TOKEN_NAMES = (
     "maxtpm",
     "maxtpm_input_tpm",
@@ -30,6 +30,16 @@ def parse_start_percent(value):
             or not 0 <= value < 100 or not math.isfinite(value)):
         raise ValueError("metrics maxtpm_start_percent must be finite and in [0, 100)")
     return float(value)
+
+
+def resolve_start_percent(settings, session_count, target_concurrency):
+    """Use selected sample count and request concurrency; explicit settings win."""
+    if "maxtpm_start_percent" in settings:
+        return settings["maxtpm_start_percent"], "configured"
+    if (session_count is not None and target_concurrency is not None
+            and session_count * 2 == target_concurrency * 3):
+        return 53.0, "samples_1_5x_concurrency"
+    return 40.0, "default"
 
 
 def latency_points(backend, trial, start, minutes, session_count, reason):
@@ -162,10 +172,12 @@ def _concurrency_end(rows, start, end, target):
 def dataset_maxtpm(backend, fact, bounds, occupancy):
     trial = fact.trial_id
     count = fact.scheduling.dataset_turn_count
-    percent = parse_start_percent(backend.settings.get("maxtpm_start_percent", 40))
+    target = fact.load_profile.target_concurrency
+    percent, percent_source = resolve_start_percent(
+        backend.settings, fact.scheduling.dataset_session_count, target,
+    )
     numerator, denominator = (Decimal(str(percent)) / 100).as_integer_ratio()
     lower = (count * numerator + denominator - 1) // denominator if count else None
-    target = fact.load_profile.target_concurrency
     start = end_boundary = None
     confirmed_ns = end_reason = None
     end_turns = None
@@ -310,6 +322,7 @@ def dataset_maxtpm(backend, fact, bounds, occupancy):
         "maxtpm_dataset_turns": count,
         "maxtpm_progress_basis": "first_pass_terminal_turns",
         "maxtpm_start_percent": percent,
+        "maxtpm_start_percent_source": percent_source,
         "maxtpm_progress_start_fraction": percent / 100,
         "maxtpm_end_basis": "first_continuous_60s_below_target_concurrency",
         "maxtpm_target_concurrency": target,

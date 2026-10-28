@@ -112,7 +112,8 @@ async def _negotiate(config):
         plugin = ResponsesExecutor(validate(settings))
     parsed = plugin.settings
     probes = []
-    timeout = aiohttp.ClientTimeout(total=min(parsed['timeout_seconds'], 30))
+    request_timeout = parsed['timeout_seconds']
+    timeout = aiohttp.ClientTimeout(total=30 if request_timeout is None else min(request_timeout, 30))
     connector = aiohttp.TCPConnector(ssl=parsed.get('verify_ssl', False))
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as client:
         for effort in CANDIDATES:
