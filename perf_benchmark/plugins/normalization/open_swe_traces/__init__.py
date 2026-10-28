@@ -8,6 +8,25 @@ from perf_benchmark.core.validation import positive_int
 from perf_benchmark.plugins import register_plugin
 
 
+def normalize_tools(raw_tools):
+    """Keep OpenAI tools intact; wrap SWE's Anthropic function schemas."""
+    tools = []
+    for raw in raw_tools or []:
+        tool = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(tool, dict):
+            raise ValueError("tools must contain objects")
+        if "type" not in tool and "input_schema" in tool:
+            if not isinstance(tool.get("name"), str) or not tool["name"]:
+                raise ValueError("Anthropic tools require a nonempty name")
+            if not isinstance(tool["input_schema"], dict):
+                raise ValueError("tool input_schema must be an object")
+            function = {key: tool[key] for key in ("name", "description") if key in tool}
+            function["parameters"] = tool["input_schema"]
+            tool = {"type": "function", "function": function}
+        tools.append(tool)
+    return tools
+
+
 def parse_settings(settings):
     parsed = parse_record_settings(
         settings, plugin="open-swe-traces", extra=("missing_tool_call_id",),
@@ -81,10 +100,7 @@ class OpenSWETracesNormalization(RecordNormalizationPlugin):
         cleaned, placeholders, repairs = _messages(
             messages, self.settings["missing_tool_call_id"],
         )
-        tools = [json.loads(tool) if isinstance(tool, str) else tool
-                 for tool in record.get("tools") or []]
-        if any(not isinstance(tool, dict) for tool in tools):
-            raise ValueError("tools must contain objects")
+        tools = normalize_tools(record.get("tools"))
         positions = [index for index, message in enumerate(cleaned)
                      if message.get("role") == "assistant"]
         inputs, outputs = record["benchmark_input_tokens"], record["benchmark_output_tokens"]

@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 import json
 import logging
+import re
 
 import aiohttp
 
@@ -90,6 +91,13 @@ def _unsupported(status, data, effort):
         'allowed', 'permitted', 'literal_error', 'extra_forbidden', 'unrecognized',
         'unknown parameter', 'not one of',
     ))
+    validation = re.split(
+        r'supported types|supported values|allowed values|expected one of', text, maxsplit=1,
+    )
+    if len(validation) == 2 and 'unexpected' in validation[0]:
+        return bool(field and re.search(
+            rf'(?<![\w-]){re.escape(effort.lower())}(?![\w-])', validation[0],
+        ))
     return field and rejection
 
 

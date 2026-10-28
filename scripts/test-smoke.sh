@@ -10,9 +10,12 @@ if [[ -z "${PYTHON:-}" ]]; then
   fi
 fi
 exec "$PYTHON" -m pytest -q \
-  tests/normalization/test_open_swe_tool_ids.py \
-  tests/normalization/test_open_swe_traces_e2e.py \
-  tests/e2e/test_business_protocols.py \
+  tests/normalization/test_open_swe_tool_ids.py::test_match_single_repairs_only_unambiguous_real_ids_and_preserves_source \
+  tests/normalization/test_open_swe_tool_ids.py::test_match_single_rejects_ambiguous_parallel_results \
+  'tests/normalization/test_open_swe_traces_e2e.py::test_complete_recorded_swe_replay_uses_natural_outputs[recorded]' \
+  'tests/normalization/test_open_swe_traces_e2e.py::test_complete_recorded_swe_replay_uses_natural_outputs[anthropic-tools]' \
+  tests/app/test_reasoning_validation.py::test_template_validation_negotiates_supported_effort \
+  tests/runtime/test_native_executor.py::test_started_callback_failure_settles_native_before_release \
   tests/executor/test_rust_openai_chat.py::test_pending_attempt_settles_before_releasing_body \
   tests/executor/test_openai_chat.py::test_explicit_null_uses_server_default_without_output_cap \
   tests/executor/test_rust_openai_chat.py::test_null_output_cap_survives_native_http \

@@ -35,6 +35,8 @@ tests/saver/test_compact.py -export-ignore
 tests/conftest.py -export-ignore
 tests/app/test_platform_signals.py -export-ignore
 tests/app/test_reasoning.py -export-ignore
+tests/app/test_reasoning_optional_timeout.py -export-ignore
+tests/app/test_reasoning_validation.py -export-ignore
 tests/app/test_experiments.py -export-ignore
 tests/core/test_code_size.py -export-ignore
 tests/core/test_import_boundaries.py -export-ignore
@@ -51,6 +53,7 @@ tests/executor/test_cache_salt.py -export-ignore
 tests/executor/test_dataset_headers.py -export-ignore
 tests/executor/test_native_http.py -export-ignore
 tests/executor/test_openai_chat.py -export-ignore
+tests/executor/test_openai_chat_optional_timeout.py -export-ignore
 tests/executor/test_openai_completions.py -export-ignore
 tests/executor/test_request_validation.py -export-ignore
 tests/executor/test_rust_openai_chat.py -export-ignore
@@ -59,12 +62,14 @@ tests/exporter/test_console.py -export-ignore
 tests/exporter/test_html.py -export-ignore
 tests/exporter/test_tabular.py -export-ignore
 tests/exporter/test_append_scaling.py -export-ignore
+tests/exporter/test_append_headers.py -export-ignore
 tests/hooks/test_request_parameters.py -export-ignore
 tests/loader/test_hf_datasets.py -export-ignore
 tests/metrics/fixtures/standard-baseline.json -export-ignore
 tests/metrics/test_baseline.py -export-ignore
 tests/metrics/test_groups.py -export-ignore
 tests/metrics/test_maxtpm_billing.py -export-ignore
+tests/metrics/test_maxtpm_auto_start.py -export-ignore
 tests/metrics/test_standard.py -export-ignore
 tests/metrics/test_timeline.py -export-ignore
 tests/metrics/test_validity.py -export-ignore

@@ -228,6 +228,7 @@ extra_body:
 ### 3.2 默认思考档位
 
 `perf-benchmark run` 的 Chat 与 Responses，以及静态 Decode 测试，默认在正式测量前按 `max → xhigh → high` 协商思考档位。服务明确返回当前思考字段或取值校验错误时，依次尝试下一档；鉴权、限流、超时、连接及其他错误直接报告。三档均被拒绝时停止准备。多个 Chat 服务地址共同选择全部端点接受的最高档位。
+协商依据服务返回的字段校验和支持值信息，适用于各类模型及模板；显式配置的档位保持原值。
 
 准备探测使用独立短请求，可能产生少量服务用量；正式统计和计费仅包含测试请求。选定档位冻结在运行配置中，运行证据保存各次探测的档位与HTTP状态，Excel的生成参数保存实际选择值。服务接受参数表示协议校验通过，模型执行效果由部署实现决定。正式测量期间沿用已冻结的请求设置和正常失败处理。
 
@@ -826,7 +827,12 @@ recorded 回放使用数据中的下一份完整上下文；live continuation �
 将第 2 节的 normalization 改为 `plugin: open-swe-traces`、`settings: {}`，并指定轨迹数据文件。
 准备阶段构造每轮完整请求，
 完整保留录制上下文、reasoning 和工具声明；请求长度处理交给服务端，超长请求失败如实保存。
+SWE 工具定义中的 `name`、`description`、`input_schema` 在准备阶段转换为 OpenAI 的
+`type: function`、`function.name`、`function.description`、`function.parameters`。
+已有 OpenAI 工具定义沿用原值，原始 JSONL、消息轨迹和参考 token 计数保持原样。
 默认最多生成4,096 token并保留自然 EOS；显式声明的正整数 `requested_output_tokens` 按原值发送。
+Chat 请求收到完整响应及正常终止标记后按成功统计。`finish_reason: length` 表示达到输出上限，
+仅含思考内容的正常响应沿用该判定；停止原因保存在请求明细中，吞吐和计费采用响应 usage。
 数据集预计算输入/输出计数用于描述参考分词器下的数据画像；实测吞吐和收入采用服务端响应 usage。
 
 数据集全量逐轮均值与 maxTPM 有效窗口均值分别描述各自的请求队列。持续增长的录制历史

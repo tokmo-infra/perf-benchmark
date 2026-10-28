@@ -1,5 +1,12 @@
 name: Native Executor wheels
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: native-wheels-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   wheel:
     strategy:
@@ -33,10 +40,37 @@ jobs:
           toolchain: '1.87.0'
           components: rustfmt, clippy
       - run: uv sync --locked --extra test
-      - run: uv run python -c "import os,sys; open(os.environ['GITHUB_ENV'],'a').write('PYO3_PYTHON='+sys.executable+'\n')"
+      - name: Configure Python libraries for native tests
+        run: |
+          uv run python - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+
+          prefix = Path(sys.base_prefix)
+          variables = {"PYO3_PYTHON": sys.executable}
+          if sys.platform in ("linux", "darwin"):
+              library = str(prefix / "lib")
+              assert Path(library).is_dir(), library
+              loader = "LD_LIBRARY_PATH" if sys.platform == "linux" else "DYLD_LIBRARY_PATH"
+              variables["LIBRARY_PATH"] = os.pathsep.join(filter(None, (library, os.environ.get("LIBRARY_PATH"))))
+              variables["PERF_NATIVE_LIBRARY_PATH"] = os.pathsep.join(filter(None, (library, os.environ.get(loader))))
+          else:
+              with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as path:
+                  path.write(str(prefix) + "\n")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name, value in variables.items():
+                  environment.write(f"{name}={value}\n")
+          PY
       - run: cargo fmt --manifest-path perf_benchmark/Cargo.toml --all --check
       - run: cargo test --manifest-path perf_benchmark/Cargo.toml --workspace --locked
+        env:
+          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && env.PERF_NATIVE_LIBRARY_PATH || env.LD_LIBRARY_PATH }}
+          DYLD_LIBRARY_PATH: ${{ runner.os == 'macOS' && env.PERF_NATIVE_LIBRARY_PATH || env.DYLD_LIBRARY_PATH }}
       - run: cargo test --manifest-path perf_benchmark/Cargo.toml --workspace --release --locked
+        env:
+          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && env.PERF_NATIVE_LIBRARY_PATH || env.LD_LIBRARY_PATH }}
+          DYLD_LIBRARY_PATH: ${{ runner.os == 'macOS' && env.PERF_NATIVE_LIBRARY_PATH || env.DYLD_LIBRARY_PATH }}
       - run: cargo clippy --manifest-path perf_benchmark/Cargo.toml --workspace --all-targets --locked -- -D warnings
       - run: uv run pytest tests/executor tests/runtime/test_native_executor.py
       - uses: PyO3/maturin-action@v1

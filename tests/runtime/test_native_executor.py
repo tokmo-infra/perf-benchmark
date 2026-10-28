@@ -216,7 +216,7 @@ async def test_bad_native_body_releases_python_preparation(trial_context):
         await ctx.events.close()
 
 
-async def test_started_callback_failure_settles_native_before_release(trial_context):
+async def test_started_callback_failure_settles_native_before_release(trial_context, monkeypatch):
     from tests.runtime.test_request import setup_request
     from perf_benchmark.runtime.attempt import AttemptSignal
     from perf_benchmark.pipeline.contracts.executor import AttemptPlan
@@ -225,15 +225,32 @@ async def test_started_callback_failure_settles_native_before_release(trial_cont
     def broken(_):
         raise RuntimeError('started callback failed')
     signal.started_callback = broken
+    cleanup_started, cleanup_allowed = asyncio.Event(), asyncio.Event()
+    release = runtime.release
+    async def delayed_release(prepared):
+        settlement = await release(prepared)
+        async def settle():
+            cleanup_started.set()
+            await cleanup_allowed.wait()
+            if settlement is not None:
+                await settlement
+        return asyncio.create_task(settle())
+    monkeypatch.setattr(runtime, 'release', delayed_release)
     try:
         await runtime.prepare()
         prepared = await runtime.prepare_attempt(value)
+        execution = asyncio.create_task(runtime.execute_attempt(prepared, signal))
+        await asyncio.wait_for(cleanup_started.wait(), 3)
+        await asyncio.sleep(0)
+        assert not execution.done()
+        cleanup_allowed.set()
         with pytest.raises(RuntimeError, match='started callback failed'):
-            await runtime.execute_attempt(prepared, signal)
+            await execution
         assert ctx.cancellation.is_cancelled()
         assert not runtime._prepared and runtime.native.active_count == 0
         await runtime.close()
     finally:
+        cleanup_allowed.set()
         await ctx.events.close()
 
 
