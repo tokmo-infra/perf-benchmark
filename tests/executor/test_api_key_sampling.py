@@ -40,7 +40,6 @@ def test_default_is_unauthenticated_even_when_old_default_env_is_set(
     assert custom.request_headers(custom.settings)['Authorization'] == 'custom'
 
 
-@pytest.mark.parametrize('protocol,cls,kind', PROTOCOLS, ids=[p[2] for p in PROTOCOLS])
 @pytest.mark.parametrize('change', [
     {'api_key_sampling': 'round-robin'},
     {'api_key_sampling': None},
@@ -63,40 +62,43 @@ def test_default_is_unauthenticated_even_when_old_default_env_is_set(
         {'env': 'PERF_KEY_A', 'weight': 1e308}, {'env': 'PERF_KEY_B', 'weight': 1e308},
     ]},
 ])
-def test_invalid_api_key_settings_fail_at_validation(protocol, cls, kind, change):
+def test_invalid_api_key_settings_fail_at_validation(change):
     with pytest.raises(ValueError):
-        protocol.validate({**BASE, **change})
+        request.validate_api_keys(dict(change))
 
 
-@pytest.mark.parametrize('protocol,cls,kind', PROTOCOLS, ids=[p[2] for p in PROTOCOLS])
 @pytest.mark.parametrize('weight', [True, False, '1', None, -1, float('nan'), float('inf'), -float('inf'), 10 ** 1000])
-def test_weights_must_be_finite_nonnegative_real_numbers(protocol, cls, kind, weight):
+def test_weights_must_be_finite_nonnegative_real_numbers(weight):
     with pytest.raises(ValueError, match='weight'):
-        protocol.validate({**BASE, 'api_key_sampling': 'weighted',
+        request.validate_api_keys({'api_key_sampling': 'weighted',
                            'api_keys': [{'env': 'PERF_KEY_A', 'weight': weight}]})
 
 
-@pytest.mark.parametrize('protocol,cls,kind', PROTOCOLS, ids=[p[2] for p in PROTOCOLS])
 @pytest.mark.parametrize('header', ['Authorization', 'authorization', 'aUtHoRiZaTiOn'])
-def test_managed_credentials_reject_custom_authorization(protocol, cls, kind, header):
+def test_managed_credentials_reject_custom_authorization(header):
     with pytest.raises(ValueError, match='Authorization'):
-        protocol.validate({**BASE, 'api_keys': KEYS,
+        request.validate_api_keys({'api_keys': KEYS,
                            'extra_headers': {header: 'raw-secret'}})
 
 
 @pytest.mark.parametrize('protocol,cls,kind', PROTOCOLS, ids=[p[2] for p in PROTOCOLS])
+def test_protocols_apply_shared_credential_validation(protocol, cls, kind):
+    with pytest.raises(ValueError, match='api_key_sampling'):
+        protocol.validate({**BASE, 'api_key_sampling': 'round-robin'})
+
+
 @pytest.mark.parametrize('key', [None, '', ' \t ', 'PRIVATE_TOKEN\rBAD', 'PRIVATE_TOKEN\nBAD'])
 def test_missing_or_invalid_environment_values_fail_without_disclosure(
-    protocol, cls, kind, key, monkeypatch,
+    key, monkeypatch,
 ):
     monkeypatch.setenv('PERF_KEY_A', 'valid-private-token')
     if key is None:
         monkeypatch.delenv('PERF_KEY_B', raising=False)
     else:
         monkeypatch.setenv('PERF_KEY_B', key)
-    parsed = protocol.validate({**BASE, 'api_keys': KEYS})
+    parsed = openai_chat.validate({**BASE, 'api_keys': KEYS})
     with pytest.raises(ValueError) as failure:
-        cls(parsed)
+        openai_chat.OpenAIChatExecutor(parsed)
     assert 'valid-private-token' not in str(failure.value)
     assert 'PRIVATE_TOKEN' not in str(failure.value)
 
@@ -141,13 +143,12 @@ def test_weighted_sampling_defaults_weights_and_accepts_small_positive_totals(mo
     assert plugin.request_headers(plugin.settings)['Authorization'] == 'Bearer private-token-a'
 
 
-@pytest.mark.parametrize('protocol,cls,kind', PROTOCOLS, ids=[p[2] for p in PROTOCOLS])
 def test_credentials_are_resolved_once_and_never_inserted_into_settings(
-    protocol, cls, kind, monkeypatch,
+    monkeypatch,
 ):
     monkeypatch.setenv('PERF_KEY_A', 'private-original-a')
     monkeypatch.setenv('PERF_KEY_B', 'private-original-b')
-    plugin = cls(protocol.validate({**BASE, 'api_keys': KEYS}))
+    plugin = openai_chat.OpenAIChatExecutor(openai_chat.validate({**BASE, 'api_keys': KEYS}))
     monkeypatch.setenv('PERF_KEY_A', 'private-replacement-a')
     monkeypatch.delenv('PERF_KEY_B')
     selections = iter([0, 1])

@@ -1,8 +1,9 @@
 from copy import deepcopy
+import json
 import pytest
 
 from perf_benchmark.plugins.normalization.open_swe_traces import (
-    OpenSWETracesNormalization, parse_settings,
+    OpenSWETracesNormalization, normalize_tools, parse_settings,
 )
 from perf_benchmark.core.tokenization import ModelTokenizer
 
@@ -55,6 +56,48 @@ def test_preserves_recorded_tools_reasoning_and_all_turns(prepared_plugin):
     ]
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+def test_anthropic_tool_schemas_use_openai_function_wrapper(prepared_plugin, as_json):
+    schema = {"type": "object", "properties": {"command": {"type": "string"}},
+              "required": ["command"], "additionalProperties": False}
+    tool = {"name": "Bash", "description": "Execute a command", "input_schema": schema}
+    record = {"benchmark_session_id": "anthropic-swe", "messages": [
+        {"role": "user", "content": "fix"},
+        {"role": "assistant", "content": "answer"}],
+        "tools": [json.dumps(tool) if as_json else tool],
+        "benchmark_input_tokens": [123], "benchmark_output_tokens": [45]}
+    original = deepcopy(record)
+    turn = next(iter(prepared_plugin().normalize_record(record, 0)))
+    assert turn.request["tools"] == [{"type": "function", "function": {
+        "name": "Bash", "description": "Execute a command", "parameters": schema}}]
+    assert turn.estimated_input_tokens.value == 123
+    assert turn.reference_output_tokens.value == 45
+    assert record == original
+
+
+def test_mixed_tool_formats_preserve_openai_fields_and_nested_schema():
+    schema = {"type": "object", "properties": {"items": {
+        "type": "array", "items": {"type": "object", "additionalProperties": False}}}}
+    tools = [{"type": "function", "function": {
+        "name": "existing", "strict": True, "parameters": schema}},
+        {"name": "converted", "input_schema": schema}]
+    original = deepcopy(tools)
+    assert normalize_tools(tools) == [original[0], {"type": "function", "function": {
+        "name": "converted", "parameters": schema}}]
+    assert tools == original
+
+
+@pytest.mark.parametrize("tool, error", [
+    ([], "tools must contain objects"),
+    ({"input_schema": {}}, "nonempty name"),
+    ({"name": "", "input_schema": {}}, "nonempty name"),
+    ({"name": "bash", "input_schema": []}, "input_schema must be an object"),
+])
+def test_invalid_tool_schemas_report_source_error(tool, error):
+    with pytest.raises(ValueError, match=error):
+        normalize_tools([tool])
+
+
 def test_rejects_unknown_settings_and_mismatched_counts(prepared_plugin):
     with pytest.raises(ValueError):
         parse_settings({"context_length": 100, "live": True})
@@ -65,10 +108,10 @@ def test_rejects_unknown_settings_and_mismatched_counts(prepared_plugin):
         list(prepared_plugin().normalize_record(record, 0))
 
 
-@pytest.mark.parametrize("dataset_tokens", [70963, 181882, 2000000])
 def test_full_history_is_replayed_without_local_length_filtering(
-    prepared_plugin, monkeypatch, dataset_tokens,
+    prepared_plugin, monkeypatch,
 ):
+    dataset_tokens = 2000000
     def forbidden(*args, **kwargs):
         raise AssertionError("must not tokenize a request before sending")
     monkeypatch.setattr(ModelTokenizer, "encode_chat", forbidden)
@@ -92,10 +135,7 @@ def test_full_history_is_replayed_without_local_length_filtering(
 
 @pytest.mark.parametrize("settings", [
     {"context_length": 1048576},
-    {"context_length": True, "tokenizer_path": "model"},
-    {"context_length": 1048576, "tokenizer_path": ""},
-    {"context_length": 1048576, "tokenizer_path": "model", "template_options": {"enable_thinking": 1}},
-    {"context_length": 1048576, "tokenizer_path": "model", "template_options": {"other": True}},
+    {"tokenizer_path": "model"},
 ])
 def test_rejects_retired_tokenizer_and_context_settings(settings):
     with pytest.raises((ValueError, TypeError)):

@@ -218,18 +218,22 @@ scripts/        前端构建及 Python 包发布入口
 
 ## 验证
 
-普通修改执行：
+日常修改执行关键链路验收：
 
 ```bash
 uv lock --check
-uv run pytest
+PYTHON=.venv/bin/python bash scripts/test-smoke.sh
 ```
 
 精简源码包保留核心 Python 回归测试及其公共夹具，另保留 Rust 与前端构建验证所需的测试。源码行数用于分类统计，执行链覆盖率门槛为 90%。完整开发仓库另含真实服务、外部数据集和容量验收测试；具备相应前置条件时，在完整开发仓库启用这些专项检查。
+公共校验逻辑集中验证，各协议保留接入与协议特有行为测试。参数组合按独立行为选取代表场景。
+合并前执行完整的 `uv run pytest`；远端同步使用上述关键链路验收。
 
 修改 Executor 或公共请求准备/原生扩展生命周期时，执行 `uv run pytest --cov --cov-config=tests/executor/coverage.ini`；Python 执行链语句与分支综合覆盖率至少 90%，统计范围覆盖全部执行链生产文件和错误分支。
 
 修改 Rust 执行扩展时，另外在 `perf_benchmark/` 下执行 `cargo test --workspace --locked`、`cargo test --workspace --release --locked`、`cargo fmt --all --check` 和 `cargo clippy --workspace --all-targets --locked -- -D warnings`。
+
+wheel CI 将 PYO3_PYTHON 固定为当前虚拟环境解释器。Linux/macOS 的链接器使用该解释器基础目录下的 lib，动态加载路径限定在 Rust 测试步骤；Windows 将基础目录加入 PATH。TLS 测试使用独立证书配置。CI 覆盖 Python 3.11～3.14 及五个平台，个人分支通过 PR 执行矩阵校验，同一分支的新提交替换旧校验任务。
 
 完成标准为相关行为测试通过、warning 检查通过，以及废弃接口和路径清理完成。
 
@@ -251,6 +255,7 @@ uv run pytest
 Rust transport 在接收 bytes 时记录时间，JSON/SSE 解析和数据库操作在请求计时区间之外处理。
 保留 connect/send/body 原始异常 cause；空闲连接复用最多4秒，重试由 Scheduler 显式控制。
 Chat timeout_seconds 接受 null 或有限正数，默认300秒；Python bridge 将 null 转为 Rust 的0秒哨兵，表示请求总时限由响应结束或主动取消决定。连接建立保留独立30秒时限，清理保留独立100ms边界，思考能力探测最多30秒。Rust 测试覆盖延迟流、有限总超时及主动取消。
+执行异常与取消在返回前等待所属原生请求完成资源回收；正常结果继续使用后台收尾路径。
 TTFT/TPOT/ITL 只有可观测的流式文本响应才能计算，chunk 表示传输事件，token 数以 usage 为准。
 
 maxtpm 的 dataset_turn_count 取选中数据集的首遍轮数；活跃用户池由独立参数配置。

@@ -47,7 +47,7 @@ class RustHttpExecutorRuntime(RequestRuntime):
         task = asyncio.current_task()
         assert task is not None
         signal.bind(task.cancel)
-        cancelled = False
+        join_settlement = False
         try:
             if self.native is None or self._close_task is not None:
                 raise RuntimeError("Rust runtime is not open")
@@ -71,13 +71,12 @@ class RustHttpExecutorRuntime(RequestRuntime):
                 asyncio.create_task(self._notify_start(handle, signal))
                 if signal.started_callback is not None else None
             )
-            cancelled = False
             try:
                 value = await asyncio.shield(operation)
                 if started is not None:
                     await finish_task(started)
             except asyncio.CancelledError:
-                cancelled = True
+                join_settlement = True
                 handle.cancel()
                 try:
                     value = await finish_task(operation)
@@ -116,12 +115,13 @@ class RustHttpExecutorRuntime(RequestRuntime):
                 result.retryable = signal.action == "fail" and result.recoverable
             return result
         except Exception:
+            join_settlement = True
             self.cancellation.cancel("native execution failure")
             raise
         finally:
             signal.close()
             settlement = await self.release(prepared)
-            if cancelled and settlement is not None:
+            if join_settlement and settlement is not None:
                 try:
                     await finish_task(settlement)
                 except asyncio.CancelledError:

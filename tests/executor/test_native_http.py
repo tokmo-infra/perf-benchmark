@@ -111,7 +111,10 @@ async def test_trusted_tls_and_https_proxy_connect(tmp_path, monkeypatch):
     import ssl
     import subprocess
     cert, key = tmp_path / 'cert.pem', tmp_path / 'key.pem'
+    config = tmp_path / 'openssl.cnf'
+    config.write_text('[req]\ndistinguished_name=dn\n[dn]\n')
     subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                    '-config', str(config),
                     '-subj', '/CN=localhost', '-addext', 'basicConstraints=critical,CA:FALSE',
                     '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
                     '-keyout', str(key), '-out', str(cert)], check=True, capture_output=True)

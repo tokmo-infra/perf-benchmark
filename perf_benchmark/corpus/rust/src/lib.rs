@@ -153,26 +153,21 @@ fn generate_block(
 fn producer_loop(
     tokenizer: Tokenizer,
     block_size: usize,
-    full_tx: Sender<String>,
-    ragged_commands: Receiver<usize>,
-    ragged_txs: Vec<Sender<String>>,
+    full_tx: &Sender<String>,
+    ragged_commands: &Receiver<usize>,
+    ragged_txs: &[Sender<String>],
     stop: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut rng = rand::thread_rng();
     let mut ctx = BatchSampleContext::new(block_size);
     while !stop.load(Ordering::Acquire) {
         if let Ok(size) = ragged_commands.try_recv() {
-            let block = generate_block(&tokenizer, size, &mut ctx, &ragged_txs, &mut rng, &stop)?;
+            let block = generate_block(&tokenizer, size, &mut ctx, ragged_txs, &mut rng, &stop)?;
             let _ = ragged_txs[size - 1].try_send(block);
             continue;
         }
         let block = generate_block(
-            &tokenizer,
-            block_size,
-            &mut ctx,
-            &ragged_txs,
-            &mut rng,
-            &stop,
+            &tokenizer, block_size, &mut ctx, ragged_txs, &mut rng, &stop,
         )?;
         let mut pending = block;
         while !stop.load(Ordering::Acquire) {
@@ -183,7 +178,7 @@ fn producer_loop(
             }
             if let Ok(size) = ragged_commands.try_recv() {
                 let block =
-                    generate_block(&tokenizer, size, &mut ctx, &ragged_txs, &mut rng, &stop)?;
+                    generate_block(&tokenizer, size, &mut ctx, ragged_txs, &mut rng, &stop)?;
                 let _ = ragged_txs[size - 1].try_send(block);
             }
         }
@@ -236,8 +231,16 @@ impl TokenSampler {
             let handle = thread::Builder::new()
                 .name(format!("trace-block-{index}"))
                 .spawn(move || {
+                    // Keep channels connected until the failure state is published.
                     let result = catch_unwind(AssertUnwindSafe(|| {
-                        producer_loop(tokenizer, block_size, tx, commands, tails, stopped.clone())
+                        producer_loop(
+                            tokenizer,
+                            block_size,
+                            &tx,
+                            &commands,
+                            &tails,
+                            stopped.clone(),
+                        )
                     }));
                     let message = match result {
                         Ok(Ok(())) => None,
@@ -277,6 +280,7 @@ impl TokenSampler {
     }
 
     fn check(&self) -> Result<(), String> {
+        let stopped = self.active.load(Ordering::Acquire) == 0 || self.stop.load(Ordering::Acquire);
         if let Some(message) = self
             .error
             .lock()
@@ -285,7 +289,7 @@ impl TokenSampler {
         {
             return Err(message.clone());
         }
-        if self.active.load(Ordering::Acquire) == 0 || self.stop.load(Ordering::Acquire) {
+        if stopped {
             return Err("trace block producer stopped".into());
         }
         Ok(())
@@ -548,12 +552,17 @@ mod tests {
     fn producer_failure_is_reported_instead_of_blocking_consumer() {
         // An empty vocabulary makes random sampling impossible. The producer
         // must report its failure to a waiting consumer and remain joinable.
-        let sampler = TokenSampler::new(Tokenizer::new(BPE::default()), 16, 2, 2).unwrap();
-        let error = sampler.get(16).unwrap_err();
-        assert!(error.contains("tokenizer vocabulary is empty"), "{error}");
-        let active = sampler.active.clone();
-        drop(sampler);
-        assert_eq!(active.load(Ordering::Acquire), 0);
+        for workers in [1, 2] {
+            for size in [8, 16] {
+                let sampler =
+                    TokenSampler::new(Tokenizer::new(BPE::default()), 16, workers, 2).unwrap();
+                let error = sampler.get(size).unwrap_err();
+                assert!(error.contains("tokenizer vocabulary is empty"), "{error}");
+                let active = sampler.active.clone();
+                drop(sampler);
+                assert_eq!(active.load(Ordering::Acquire), 0);
+            }
+        }
     }
 
     #[test]

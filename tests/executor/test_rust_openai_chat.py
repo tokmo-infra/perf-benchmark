@@ -248,10 +248,11 @@ async def test_stream_completion_and_failure_preserve_partial_facts(tail, error)
             await native.close()
 
 
-@pytest.mark.parametrize("stream", [True, False])
-@pytest.mark.parametrize("finish_reason", ["length", "stop", "content_filter"])
-@pytest.mark.parametrize("completion_tokens", [0, 4096])
-@pytest.mark.parametrize("cached_tokens", [0, 126720])
+@pytest.mark.parametrize("stream,finish_reason,completion_tokens,cached_tokens", [
+    (True, "length", 4096, 126720), (False, "length", 0, 0),
+    (True, "stop", 0, 0), (False, "stop", 4096, 126720),
+    (True, "content_filter", 4096, 0), (False, "content_filter", 0, 126720),
+])
 async def test_completed_empty_response_keeps_usage_and_missing_output_timing(
     stream, finish_reason, completion_tokens, cached_tokens,
 ):
