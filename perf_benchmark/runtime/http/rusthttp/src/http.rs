@@ -76,7 +76,7 @@ impl Http {
             samples: Vec::with_capacity(64),
             ..Default::default()
         };
-        if !cmd.timeout.is_finite() || cmd.timeout <= 0.0 {
+        if !cmd.timeout.is_finite() || cmd.timeout < 0.0 {
             fail(&mut out, "transport", "TimeoutError", true);
             out.completed_ns = Some(now());
             let _ = result.send(out);
@@ -161,7 +161,7 @@ impl Http {
                 }
             };
             pool = Some(client.clone());
-            if cancel.is_cancelled() || Instant::now() >= deadline {
+            if cancel.is_cancelled() || (cmd.timeout > 0.0 && Instant::now() >= deadline) {
                 return;
             }
             let at = now();
@@ -365,7 +365,8 @@ impl Http {
         let end = tokio::select! {
             biased;
             _ = cancel.cancelled() => End::Cancel,
-            _ = sleep_until(deadline) => End::Timeout,
+            // Zero disables the TOTAL request deadline; explicit cancellation still works.
+            _ = sleep_until(deadline), if cmd.timeout > 0.0 => End::Timeout,
             _ = work => End::Done,
         };
         if matches!(end, End::Cancel) || cancel.is_cancelled() {
@@ -387,7 +388,7 @@ impl Http {
                 cmd.plan.action == "fail",
             );
         } else if matches!(end, End::Timeout)
-            || Instant::now() >= deadline
+            || (cmd.timeout > 0.0 && Instant::now() >= deadline)
             || (out.started_ns.is_none() && out.error.is_none())
         {
             fail(&mut out, "transport", "TimeoutError", true);
@@ -429,7 +430,12 @@ impl Http {
         let mut reusable = false;
         if succeeded {
             if let Some(response) = response.as_mut() {
-                let cleanup_deadline = deadline.min(Instant::now() + Duration::from_millis(100));
+                let cleanup_bound = Instant::now() + Duration::from_millis(100);
+                let cleanup_deadline = if cmd.timeout > 0.0 {
+                    deadline.min(cleanup_bound)
+                } else {
+                    cleanup_bound
+                };
                 reusable = tokio::select! {
                     _ = cancel.cancelled() => false,
                     _ = sleep_until(cleanup_deadline) => false,

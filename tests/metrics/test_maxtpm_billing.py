@@ -126,7 +126,7 @@ pipeline:
     parsed = parse_settings(config["pipeline"]["metrics"]["settings"])
     assert parsed["maxtpm"] is True
     assert parsed["maxtpm_start_percent"] == 12.5
-    assert parse_settings({})["maxtpm_start_percent"] == 40
+    assert "maxtpm_start_percent" not in parse_settings({})
     assert parse_settings({})["maxtpm"] is False
 
 
@@ -207,7 +207,10 @@ def test_maxtpm_default_matches_explicit_40_percent():
             reports.append(backend.finalize_trial(trial(4)))
         finally:
             backend.close()
-    assert reports[0] == reports[1]
+    assert reports[0].diagnostics["maxtpm_start_percent_source"] == "default"
+    assert reports[1].diagnostics["maxtpm_start_percent_source"] == "configured"
+    assert replace(reports[0], diagnostics={**reports[0].diagnostics,
+        "maxtpm_start_percent_source": "configured"}) == reports[1]
 
 
 def test_maxtpm_custom_start_is_unavailable_until_configured_progress():
@@ -423,7 +426,7 @@ def test_maxtpm_starts_at_40_percent_and_ends_at_sustained_underfill_with_zero_m
         assert "maxtpm_progress_end_fraction" not in report.diagnostics
         assert report.diagnostics["maxtpm_underfill_confirmed_ns"] == 215 * NANO
         assert report.diagnostics["maxtpm_end_reason"] == "concurrency_under_target_60s"
-        assert summary["maxtpm"].formula_version == "dataset-turn-maxtpm-v7-configurable-start-underfill-60s-first-pass"
+        assert summary["maxtpm"].formula_version == "dataset-turn-maxtpm-v8-auto-start-1p5x-underfill-60s-first-pass"
     finally:
         backend.close()
 

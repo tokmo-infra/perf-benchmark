@@ -32,7 +32,7 @@ pipeline:
       base_url: http://127.0.0.1:30000
       model: replace-with-served-model-name
       stream: true
-      timeout_seconds: 300
+      timeout_seconds: null # 单次请求持续到响应结束；正数设置总超时秒数，省略时为 300 秒。
       extra_body:
         temperature: 0.1
         reasoning_effort: auto # 所有会话轮次共用测量前协商的思考档位。
@@ -50,7 +50,8 @@ pipeline:
     plugin: standard
     settings:
       maxtpm: true
-      maxtpm_start_percent: 40 # 首遍轮次完成比例，范围 [0, 100)，支持小数。
+      # 起点自动取 53%（选中会话数 = 请求并发 × 1.5）或 40%（其余情况）。
+      # maxtpm_start_percent: 45 # 显式覆盖起点，范围 [0, 100)，支持小数。
   saver:
     plugin: sqlite
     settings:

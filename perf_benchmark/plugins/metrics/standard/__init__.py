@@ -87,7 +87,8 @@ def parse_settings(settings: dict) -> dict:
     if not isinstance(maxtpm, bool):
         raise ValueError("metrics maxtpm must be boolean")
     parsed["maxtpm"] = maxtpm
-    parsed["maxtpm_start_percent"] = parse_start_percent(settings.get("maxtpm_start_percent", 40))
+    if "maxtpm_start_percent" in settings:
+        parsed["maxtpm_start_percent"] = parse_start_percent(settings["maxtpm_start_percent"])
     if "pricing" in settings:
         parsed["pricing"] = parse_pricing(settings["pricing"])
     return parsed

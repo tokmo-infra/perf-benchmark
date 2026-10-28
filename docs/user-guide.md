@@ -73,7 +73,7 @@ pipeline:
     plugin: standard
     settings:
       maxtpm: true
-      maxtpm_start_percent: 40
+      # maxtpm_start_percent: 45 # 显式覆盖自动起点。
   saver:
     plugin: sqlite
     settings:
@@ -104,10 +104,10 @@ uv run perf-benchmark run my-run.yaml
 | `scheduler.settings` | 当前模式所需的并发数或速率，见下文各模式 |
 | `saver.settings.path` | 必填，每次运行使用新的 SQLite 文件路径 |
 | `name`, `seed` | 选填；建议写清测试名和固定 seed（seed 默认 0） |
-| `stream` / `timeout_seconds` | 选填，默认 `true` / 300 秒；`timeout_seconds` 限制一次 HTTP 请求尝试的总耗时；使用 `stream: true` 测量 TTFT/ITL |
+| `stream` / `timeout_seconds` | 选填，默认 `true` / 300 秒；Chat 的 `timeout_seconds: null` 使请求持续到响应结束，正数设置一次 HTTP 请求尝试的总超时秒数；使用 `stream: true` 测量 TTFT/ITL |
 | `extra_body` | 填 `temperature/top_p` 等请求参数；生成默认 `temperature: 0.1`、最多4,096 token并保留自然 EOS；生成方式见 3.1 |
 | `metrics.settings.maxtpm` | 选填，默认 `false`，启用首遍达到指定进度至实际并发持续低于目标值前的完整分钟均值 |
-| `metrics.settings.maxtpm_start_percent` | 选填，默认 `40`；首遍轮次起点百分比，数值范围 `[0, 100)`，支持小数，`0` 表示从测试观测起点开始 |
+| `metrics.settings.maxtpm_start_percent` | 选填；选中会话数恰为请求并发的 1.5 倍时自动取 `53`，其余情况取 `40`；显式数值优先，范围 `[0, 100)`，支持小数，`0` 表示从测试观测起点开始 |
 | `metrics.settings.pricing` | 选填，填写后启用费用统计 |
 | `observation`, `logging`, `hooks` | 选填，按需启用监控、日志和扩展 |
 
@@ -510,6 +510,10 @@ on_exhausted: stop
 单档发压结束后的请求收尾、结果保存和监控退出仍需要时间，所以进程总时长可能超过所填预算。
 扫多个档位时，每个档位及每次重复各自重新计算 `stop.duration_s`；多轮会话中的每一轮请求各自重新计算 `timeout_seconds`。
 
+Chat Completions 可配置 `executor.settings.timeout_seconds: null`，单次请求持续到响应结束。
+连接建立保留 30 秒超时，主动取消继续生效；正式测量前的思考能力探测最多等待 30 秒。
+填正数时按该秒数限制单次请求总耗时，省略时为 300 秒。发压时长、搜索预算与单请求超时分别配置。
+
 ## 5. 切换数据集
 
 切换数据集时，依次填写 **loader 文件格式、normalization 数据结构、scheduler 单/多轮模式**。
@@ -587,7 +591,7 @@ pipeline:
     plugin: standard
     settings:
       maxtpm: true
-      maxtpm_start_percent: 40 # 首遍轮次完成比例，默认 40%。
+      # maxtpm_start_percent: 45 # 显式覆盖自动起点。
       pricing:
         currency: CNY
         per_tokens: 1000000
@@ -602,7 +606,10 @@ pipeline:
 
 ### maxTPM 统计区间
 
-`maxtpm_start_percent` 使用百分数数值，默认 `40`，范围 `[0, 100)`，支持小数。
+省略 `maxtpm_start_percent` 时，选中会话数恰为预设请求并发的 1.5 倍，自动取 `53`，其余情况取 `40`。
+例如选中 384 个会话、请求并发 256 时取 53%；选中 384 个会话、请求并发 192 时取 40%。
+会话数由 loader 的 `split` 和 selector 的最终选择共同决定；`max_active_sessions` 单独控制活跃用户池。
+显式配置 `maxtpm_start_percent` 时按该值统计，范围 `[0, 100)`，支持小数。
 例如 `25` 表示 25%，`12.5` 表示 12.5%。选中数据集共有 T 轮请求，配置值为 P 时，
 首遍第 `ceil(T×P/100)` 轮完成时开始，按完成时间排序；`P=0` 从测试观测起点开始。
 从起点开始，使用调度器记录的实际在途请求数与 `target_concurrency` 比较。实际并发连续 60 秒低于预设并发时，
@@ -625,7 +632,7 @@ Excel summary 的 `maxtpm_ttft_*`、`maxtpm_tpot_*`、`maxtpm_e2e_*`、`maxtpm_p
 运行结果在首遍达到配置的起点比例、并发观测可用、区间内包含完整分钟且 usage 有效时显示数值，其余情况显示 `unavailable`。
 进度按首遍全部轮次完成数量计算；循环测试沿用首遍轮次定位起点及限定统计队列。
 测试执行由 `scheduler.settings.stop` 及数据耗尽规则控制；maxTPM 区间用于吞吐、收入和同窗性能统计，全局 summary 指标使用整体窗口。
-SQLite / 同身份 Parquet 保存 `maxtpm_start_percent`、起点比例、实际边界轮数和时间戳、目标并发、持续下降的确认时刻及结束原因；CSV/Excel 分钟表保存实际完整窗口。
+SQLite / 同身份 Parquet 保存 `maxtpm_start_percent`、`maxtpm_start_percent_source`、起点比例、实际边界轮数和时间戳、目标并发、持续下降的确认时刻及结束原因；来源分别为显式配置 `configured`、1.5 倍规则 `samples_1_5x_concurrency` 和常规默认 `default`。CSV/Excel 分钟表保存实际完整窗口。
 
 ### 每分钟收入
 
@@ -822,6 +829,13 @@ recorded 回放使用数据中的下一份完整上下文；live continuation �
 默认最多生成4,096 token并保留自然 EOS；显式声明的正整数 `requested_output_tokens` 按原值发送。
 数据集预计算输入/输出计数用于描述参考分词器下的数据画像；实测吞吐和收入采用服务端响应 usage。
 
+数据集全量逐轮均值与 maxTPM 有效窗口均值分别描述各自的请求队列。持续增长的录制历史
+使后段窗口偏向较长输入。压缩轨迹长度时，可从各会话尾部随机裁掉若干完整轮次，
+保留从首轮开始的连续消息前缀，同时截取对应的输入和参考输出计数数组。
+会话轮数和最终深度保留样本之间的差异，读取沿用现有轨迹格式。离线调度模拟用于分布敏感性检查，实测验收采用同窗
+服务端 `usage.prompt_tokens`。token 加权缓存命中率为同窗 cached token 总量除以
+prompt token 总量，分子分母均来自响应 usage。
+
 `tool` 结果通过 `tool_call_id` 关联前一条 assistant 的工具调用。
 默认 `missing_tool_call_id: preserve` 沿用数据中的关联字段；要求字符串占位字段的协议解析器可配置：
 
@@ -886,7 +900,7 @@ perf计费采用响应usage与客户端完成时间队列，Prometheus原始采�
 TTFT、请求延迟与整体输出吞吐参考[NVIDIA GenAI-Perf](https://github.com/triton-inference-server/perf_analyzer/blob/main/genai-perf/README.md)的客户端口径。
 [vLLM基准实现](https://github.com/vllm-project/vllm/blob/main/vllm/benchmarks/lib/endpoint_request_func.py)将末输出事件作为latency终点，
 对应本工具的`time_to_last_output`；本工具E2E另包含响应收尾，`response_drain`保存该段时间。maxTPM采用本工具明确约定的
-首遍可配置进度起点（默认40%）、并发连续60秒低于目标值的动态终点和完整分钟均值；跨窗口请求的整条usage归入完成时刻，原始事件和监控采样保留各自时间身份。
+首遍可配置进度起点（按样本与并发比例自动取 53% 或 40%，显式配置优先）、并发连续60秒低于目标值的动态终点和完整分钟均值；跨窗口请求的整条usage归入完成时刻，原始事件和监控采样保留各自时间身份。
 
 ## 9. 离线数据与实验
 
