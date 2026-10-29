@@ -169,9 +169,9 @@ Hook 提供可选的受控拦截与观察能力。仅 `run.before_start` 和 `tr
 - Saver Plugin 在构造时接收解析设置并实现 `create_backend(RunRecord, SaverContext)`；公共 `SaverRuntime` 统一 snapshot、8192 队列、批处理、单 writer、事务、flush/finalize/close、过载失败和部分结果保留，Backend 只同步处理 immutable record batches。
 - 原始 response samples 在批内派生后释放；Trial 收尾聚合已有 Turn 结果的窗口与汇总。结果转交复用 writer 的异步消费循环。
 - 八个 Stage 各自接收只包含必需服务的冻结窄 Context；Plugin settings 在构造时独立注入，原始 Run config 由 Coordinator 管理。
-- Run 级别的分布指标和时间加权指标通过 DuckDB 完成最终计算。
+- 执行期间按批保存请求测量事实与单请求指标；进度日志读取标量计数。Trial 结束后由 DuckDB 一次计算各正式窗口的分布、时间加权指标、maxTPM 和分钟统计。
 - prefill/decode 的 `time_wm` 使用同一有效成功请求队列的 token 总量除以时长总量；prefill 使用 prompt/TTFT，decode 使用 `(completion_tokens - 1)/(last_ns - first_ns)`，聚合时统一秒单位。正 token 权重、正时长和可用的单请求速度共同限定资格，统计保存独立有效/合格/缺失样本数。`twm` 继续表示 token 加权算术平均，`am` 和分位数保留客户端接收分布。
-- 时间加权统计的公式版本为 `client-speed-time-weighted-v1`；maxTPM 完成队列使用 `dataset-turn-maxtpm-speed-time-weighted-v1-completion-cohort`。整体窗口、实时桶和 maxTPM 复用分布聚合；summary 的速度主列使用 `*_time_weighted_mean`，进度日志使用 `decode_time_weighted_tok_s`。旧结果缺少该统计时，导出保持空白；原始事实可用于独立重算。
+- 时间加权统计的公式版本为 `client-speed-time-weighted-v1`；maxTPM 完成队列使用 `dataset-turn-maxtpm-speed-time-weighted-v1-completion-cohort`。整体窗口和 maxTPM 复用分布计算；summary 的速度主列使用 `*_time_weighted_mean`，进度日志使用 `decode_time_weighted_tok_s`。旧结果缺少该统计时，导出保持空白；原始事实可用于独立重算。
 - 观测缺失的指标保留在指标目录中，并明确记录 availability 和 reason。
 - SSE chunk / 输出事件按传输事实记录，token 数以响应 usage 为准；非流式响应的 TTFT、TPOT、ITL、prefill/decode throughput 标记为 `non_streaming_response`，非文本输出遵循 `non_text_output` 契约，并保留 availability 和 reason。
 - Chat流的协议完成状态与内容长度分别判定：结构有效的终止choice及完整`[DONE]`允许空内容成功，JSON/API 错误与流完整性校验错误保留失败状态。零输出事件的首输出及decode时间点保持缺失，E2E与usage沿用已有观测；协议成功与内容质量分别记录。
