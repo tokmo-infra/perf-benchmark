@@ -7,6 +7,7 @@ import pytest
 from perf_benchmark.core.models import Trial
 from perf_benchmark.pipeline.contracts.metrics import MetricUpdate
 from perf_benchmark.pipeline.results.measurement import OccupancyFact
+from perf_benchmark.plugins.metrics.standard import parse_settings
 from perf_benchmark.plugins.metrics.standard.backend import StandardMetricsBackend
 from perf_benchmark.plugins.metrics.standard.formulas import request_metrics, request_values
 from perf_benchmark.plugins.metrics.standard.windows import WINDOW_ORDER
@@ -15,6 +16,9 @@ from tests.metrics.test_standard import _fact
 
 
 def test_request_facts_are_recorded_without_live_window_queries(monkeypatch):
+    assert "timeline" not in parse_settings({})
+    with pytest.raises(ValueError, match="unknown standard metrics setting: timeline"):
+        parse_settings({"timeline": False})
     backend = StandardMetricsBackend({}, seed=0)
     backend.open()
 
