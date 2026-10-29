@@ -22,6 +22,7 @@ exec "$PYTHON" -m pytest -q \
   tests/metrics/test_maxtpm_billing.py::test_maxtpm_missing_usage_does_not_drop_a_minute_or_request \
   tests/metrics/test_maxtpm_billing.py::test_maxtpm_latencies_use_exact_successful_completion_cohort_and_pooled_quantiles \
   tests/pipeline/test_progress.py::test_decode_preview_weights_receive_time_and_resets_each_trial \
+  tests/metrics/test_incremental_metrics.py::test_request_facts_are_recorded_without_live_window_queries \
   tests/exporter/test_tabular.py::test_summary_uses_global_distributions_and_places_parameters_first \
   tests/metrics/test_maxtpm_billing.py::test_billing_preserves_partial_cost_and_does_not_assume_missing_cache_zero \
   tests/metrics/test_maxtpm_billing.py::test_billing_distinguishes_no_observed_cost_from_observed_zero \

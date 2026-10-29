@@ -718,6 +718,7 @@ executor:
 `completed_output_tok_s`按两次日志之间完成的成功最终Turn输出量除以实际间隔计算；
 长请求输出中的token在请求完成、服务端usage到达后归入该预览。重试只按最终Turn计一次。
 日志标注`preview=true`，正式结果由SQLite/Parquet中的完整事实生成。
+执行期间按批记录请求事实与单请求指标，进度日志使用累计计数。测试结束后统一生成全局分位数、maxTPM、分钟统计与 Excel。
 
 ```yaml
 logging:
@@ -887,7 +888,7 @@ E2E等于TTFT、首末输出间隔、响应收尾时间三项之和。
 TPOT为首末输出间隔除以`completion_tokens - 1`，单请求decode速度使用相同两项的比值倒数。
 整体输出吞吐为成功请求的输出token总量除以完整测量时长。decode 时间加权速度为有效请求的 `Σ(completion_tokens - 1) / Σ(末输出时间 - 首输出时间)`；prefill 时间加权速度为 `Σprompt_tokens / ΣTTFT`，各时间项统一使用秒。每项公式的分子和分母采用同一有效请求队列。
 
-进度日志的 `decode_time_weighted_tok_s` 展示当前 Trial 累计成功请求的时间加权速度，`completed_output_tok_s` 展示本次日志间隔内完成请求的总输出吞吐。summary 的全局及 maxTPM 速度主列、Web 的时间加权均值和实时桶采用相同公式及各自窗口队列。有效 token 用量与正时间间隔共同决定样本资格，缺失观测保留 unknown 或空白，并保存对应原因和样本数。
+进度日志的 `decode_time_weighted_tok_s` 展示当前 Trial 累计成功请求的时间加权速度，`completed_output_tok_s` 展示本次日志间隔内完成请求的总输出吞吐。summary 的全局及 maxTPM 速度主列与 Web 的时间加权均值采用相同公式及各自窗口队列。有效 token 用量与正时间间隔共同决定样本资格，缺失观测保留 unknown 或空白，并保存对应原因和样本数。
 
 单请求速度及其算术平均、P50/P90/P99 描述客户端接收过程。服务端批量发送、代理缓冲或网络集中交付可以使首末输出间隔很短，对应速度值很高；这些值适合结合 TTFT、TPOT 和原始时间点分析交付行为。GPU 内部生成速度由引擎执行时间与实际计算 token 描述。SQLite / 同身份 Parquet 保留 `am`、`twm` 和 `time_wm`：`twm` 为 token 加权算术平均，`time_wm` 为时间加权平均。历史结果的时间加权统计可由原始事实重算，独立导出直接读取已保存统计。
 

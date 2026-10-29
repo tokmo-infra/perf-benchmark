@@ -25,7 +25,6 @@ from perf_benchmark.plugins.metrics.standard.formulas import (
 )
 from perf_benchmark.plugins.metrics.standard.windows import measurement_windows
 from perf_benchmark.plugins.metrics.standard.groups import grouped_metrics
-from perf_benchmark.plugins.metrics.standard.timeline import Timeline
 from perf_benchmark.plugins.metrics.standard.validity import assess
 
 from perf_benchmark.plugins.metrics.standard.storage import (
@@ -45,7 +44,6 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
     def __init__(self, settings: Mapping, *, seed: int) -> None:
         self.settings = settings
         self.seed = seed
-        self.timeline = Timeline()
         self.billing = Billing(settings.get("pricing"))
         steady = settings.get("steady", {})
         if not isinstance(steady, Mapping):
@@ -200,8 +198,7 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
         ):
             self._pending[table].extend(rows)
         self._flush_pending()
-        self.timeline.observe(facts)
-        return (*output, *self.timeline.emit(self))
+        return tuple(output)
 
     def _flush_pending(self, *, force=False):
         assert self.db is not None
@@ -358,10 +355,9 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
             overall.get(("ttft", "p95")),
             overall.get(("tpot", "p95")),
         )
-        series = self.timeline.emit(self, force=True, final_trial=fact.trial_id)
         return TrialMetricReport(
-            (*points, *(point for bucket in series for point in bucket.points)),
-            (*tuple(MetricWindowMeasurement(**row) for row in window_rows), *(bucket.window for bucket in series)),
+            tuple(points),
+            tuple(MetricWindowMeasurement(**row) for row in window_rows),
             counts,
             diagnostics,
             grouped_metrics(self.db, trial_id, windows, FORMULA_VERSION),
@@ -369,7 +365,6 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
         )
 
     def release_trial(self, trial_id: str) -> None:
-        self.timeline.release(trial_id)
         self.billing.release(trial_id)
         assert self.db is not None
         for rows in self._pending.values():

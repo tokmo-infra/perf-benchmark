@@ -71,7 +71,7 @@ tests/metrics/test_groups.py -export-ignore
 tests/metrics/test_maxtpm_billing.py -export-ignore
 tests/metrics/test_maxtpm_auto_start.py -export-ignore
 tests/metrics/test_standard.py -export-ignore
-tests/metrics/test_timeline.py -export-ignore
+tests/metrics/test_incremental_metrics.py -export-ignore
 tests/metrics/test_validity.py -export-ignore
 tests/normalization/test_open_swe_traces.py -export-ignore
 tests/normalization/test_open_swe_tool_ids.py -export-ignore

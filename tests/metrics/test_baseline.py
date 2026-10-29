@@ -34,8 +34,6 @@ def assert_same(actual, expected):
 
 
 def test_standard_coalesces_occupancy_rows_before_duckdb_append(monkeypatch):
-    # This tests the row threshold independently of periodic timeline publication.
-    monkeypatch.setattr("perf_benchmark.plugins.metrics.standard.timeline.monotonic", lambda: 0.)
     backend = StandardMetrics({}).create_backend(seed=0)
     backend.open()
     appended = []
@@ -153,7 +151,7 @@ def test_standard_matches_pre_refactor_scalar_and_window_results():
         legacy = {(row[2], row[3], row[4]) for row in expected}
         actual = [list(asdict(p).values()) for p in points if (p.window, p.metric, p.statistic) in legacy]
         assert_same(actual, expected)
-        windows = [asdict(w) for w in report.windows if not w.window.startswith("timeline:")]
+        windows = [asdict(w) for w in report.windows]
         assert_same(windows, fixture["windows"])
         assert_same(
             {**report.diagnostics, "metric_windows": windows, "metric_counts": report.counts},
