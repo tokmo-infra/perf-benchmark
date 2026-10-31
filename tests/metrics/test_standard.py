@@ -172,7 +172,7 @@ async def test_standard_metrics_builds_complete_five_window_matrix(
     assert await runtime.finalize(run) == ()
     await runtime.close()
 
-    assert tuple(item.window for item in trial.measurements.metric_windows if not item.window.startswith("timeline:")) == WINDOW_ORDER
+    assert tuple(item.window for item in trial.measurements.metric_windows) == WINDOW_ORDER
     assert len(batches) == 1
     computed_turn = batches[0][0]
     assert computed_turn.metrics["ttft"].statistics["value"] == 0.1
@@ -180,7 +180,7 @@ async def test_standard_metrics_builds_complete_five_window_matrix(
     assert computed_turn.metrics["e2e"].statistics["value"] == 0.35
     assert computed_turn.metrics["time_to_last_output"].statistics["value"] == 300.0
     assert computed_turn.metrics["response_drain"].statistics["value"] == 50.0
-    assert len([point for point in points if not point.window.startswith("timeline:")]) == sum(
+    assert len(points) == sum(
         len(definition.statistics) for definition in StandardMetrics({}).describe().metrics
     ) * len(WINDOW_ORDER)
     overall = {
@@ -199,7 +199,7 @@ async def test_standard_metrics_builds_complete_five_window_matrix(
     assert overall[("ttft", "tm")].value == 0.1
     assert overall[("workload_rps", "value")].value == pytest.approx(1 / 0.350000001)
     for window in trial.measurements.metric_windows:
-        if window.window.startswith("timeline:") or window.availability != "available":
+        if window.availability != "available":
             continue
         duration = next(point for point in points if point.window == window.window
                         and point.metric == "window_duration" and point.statistic == "value")

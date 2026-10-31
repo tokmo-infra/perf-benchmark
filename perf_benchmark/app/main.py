@@ -45,6 +45,8 @@ def parser() -> argparse.ArgumentParser:
     export.add_argument("database", type=Path)
     export.add_argument("--output", type=Path, required=True)
     export.add_argument("--formats", nargs="+", choices=("csv", "xlsx"), default=["xlsx"])
+    export.add_argument("--tables", nargs="+", choices=("summary", "minutes", "requests", "kv_capacity"),
+                        help="Tables to export (default: summary minutes)")
     observe = commands.add_parser("observe")
     observe.add_argument("database", type=Path)
     observe.add_argument("--config", type=Path)
@@ -201,7 +203,7 @@ def console_main(argv: list[str] | None = None) -> int:
         if args.command == "export":
             from perf_benchmark.app.report import export_tables
 
-            result = run_async(export_tables(args.database, args.output, args.formats))
+            result = run_async(export_tables(args.database, args.output, args.formats, tables=args.tables))
             for output in result.outputs:
                 print(output.location)
             return 0

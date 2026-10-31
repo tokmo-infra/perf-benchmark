@@ -139,5 +139,5 @@ async def test_complete_recorded_swe_replay_uses_natural_outputs(
         assert row['ttft_mean'] != '' and row['ttft_p90'] != ''
         assert row['decode_throughput_p99'] != ''
         assert 'maxtpm_start_ns' not in row
-        assert len(workbook.read('xl/workbook.xml').split(b'<sheet ')) - 1 == 3
+        assert len(workbook.read('xl/workbook.xml').split(b'<sheet ')) - 1 == 2
         assert b'name="metrics"' not in workbook.read('xl/workbook.xml')

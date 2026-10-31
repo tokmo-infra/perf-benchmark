@@ -32,25 +32,14 @@ _DISTRIBUTION_SOURCES = {
 }
 
 class DistributionCalculations:
-    def _distribution_points(self, trial_id, window, start, end, succeeded, sessions_started, *, request_only=False, statistics=None, cohort=None):
+    def _distribution_points(self, trial_id, window, start, end, succeeded, sessions_started, *, cohort=None):
         # One ranked aggregate over the latency/usage/session families. Cohorts stay
         # separate: request start for Turn statistics, Session start for Session stats.
         assert self.db is not None
-        source = ("SELECT *, ordinal AS first_ordinal FROM turns WHERE trial_id=? "
-                  "AND request_ns>=? AND request_ns<?" if request_only else
-                  "SELECT *, min(ordinal) OVER (PARTITION BY session_id) AS first_ordinal "
+        source = ("SELECT *, min(ordinal) OVER (PARTITION BY session_id) AS first_ordinal "
                   "FROM turns WHERE trial_id=?")
-        parameters = [trial_id, start, end] if request_only else [trial_id]
         where, cohort_parameters = cohort if cohort is not None else (
             "request_ns>=? AND request_ns<?", [start, end])
-        # Only trimmed means need a per-metric rank. Live timelines publish no
-        # trimmed means, so avoid sorting every sample for a discarded result.
-        ranking = (
-            "row_number() OVER (PARTITION BY metric ORDER BY value) AS rn, "
-            "count(*) OVER (PARTITION BY metric) AS n"
-            if statistics is None or "tm" in statistics else
-            "NULL::BIGINT AS rn, NULL::BIGINT AS n"
-        )
         rows = self.db.execute(
             f"""
             WITH trial AS (
@@ -74,7 +63,8 @@ class DistributionCalculations:
                             ELSE 'session_subsequent_turn_ttft' END, ttft
                 FROM cohort WHERE session_id IS NOT NULL
             ), ranked AS (
-                SELECT *, {ranking}
+                SELECT *, row_number() OVER (PARTITION BY metric ORDER BY value) AS rn,
+                       count(*) OVER (PARTITION BY metric) AS n
                 FROM samples WHERE value IS NOT NULL
             )
             SELECT metric, count(*), avg(value), stddev_samp(value), min(value), max(value),
@@ -83,7 +73,7 @@ class DistributionCalculations:
                    count(*) FILTER (WHERE value>0), sum(1.0/value) FILTER (WHERE value>0)
             FROM ranked GROUP BY metric
         """,
-            [*parameters, *cohort_parameters, trial_id, start, end],
+            [trial_id, *cohort_parameters, trial_id, start, end],
         ).fetchall()
         by_name = {row[0]: row[1:] for row in rows}
         facts = self._one(
@@ -174,8 +164,6 @@ class DistributionCalculations:
             ):
                 reason = "non_text_output"
             for statistic in definition.statistics:
-                if statistics is not None and statistic not in statistics:
-                    continue
                 value, unavailable = stats.get(statistic, (None, reason))
                 available = value is not None and _finite(value)
                 output.append(

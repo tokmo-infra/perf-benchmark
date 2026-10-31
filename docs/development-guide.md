@@ -169,9 +169,9 @@ Hook 提供可选的受控拦截与观察能力。仅 `run.before_start` 和 `tr
 - Saver Plugin 在构造时接收解析设置并实现 `create_backend(RunRecord, SaverContext)`；公共 `SaverRuntime` 统一 snapshot、8192 队列、批处理、单 writer、事务、flush/finalize/close、过载失败和部分结果保留，Backend 只同步处理 immutable record batches。
 - 原始 response samples 在批内派生后释放；Trial 收尾聚合已有 Turn 结果的窗口与汇总。结果转交复用 writer 的异步消费循环。
 - 八个 Stage 各自接收只包含必需服务的冻结窄 Context；Plugin settings 在构造时独立注入，原始 Run config 由 Coordinator 管理。
-- Run 级别的分布指标和时间加权指标通过 DuckDB 完成最终计算。
+- 执行期间按批保存请求测量事实与单请求指标；进度日志读取标量计数。Trial 结束后由 DuckDB 一次计算各正式窗口的分布、时间加权指标、maxTPM 和分钟统计。
 - prefill/decode 的 `time_wm` 使用同一有效成功请求队列的 token 总量除以时长总量；prefill 使用 prompt/TTFT，decode 使用 `(completion_tokens - 1)/(last_ns - first_ns)`，聚合时统一秒单位。正 token 权重、正时长和可用的单请求速度共同限定资格，统计保存独立有效/合格/缺失样本数。`twm` 继续表示 token 加权算术平均，`am` 和分位数保留客户端接收分布。
-- 时间加权统计的公式版本为 `client-speed-time-weighted-v1`；maxTPM 完成队列使用 `dataset-turn-maxtpm-speed-time-weighted-v1-completion-cohort`。整体窗口、实时桶和 maxTPM 复用分布聚合；summary 的速度主列使用 `*_time_weighted_mean`，进度日志使用 `decode_time_weighted_tok_s`。旧结果缺少该统计时，导出保持空白；原始事实可用于独立重算。
+- 时间加权统计的公式版本为 `client-speed-time-weighted-v1`；maxTPM 完成队列使用 `dataset-turn-maxtpm-speed-time-weighted-v1-completion-cohort`。整体窗口和 maxTPM 复用分布计算；summary 的速度主列使用 `*_time_weighted_mean`，进度日志使用 `decode_time_weighted_tok_s`。旧结果缺少该统计时，导出保持空白；原始事实可用于独立重算。
 - 观测缺失的指标保留在指标目录中，并明确记录 availability 和 reason。
 - SSE chunk / 输出事件按传输事实记录，token 数以响应 usage 为准；非流式响应的 TTFT、TPOT、ITL、prefill/decode throughput 标记为 `non_streaming_response`，非文本输出遵循 `non_text_output` 契约，并保留 availability 和 reason。
 - Chat流的协议完成状态与内容长度分别判定：结构有效的终止choice及完整`[DONE]`允许空内容成功，JSON/API 错误与流完整性校验错误保留失败状态。零输出事件的首输出及decode时间点保持缺失，E2E与usage沿用已有观测；协议成功与内容质量分别记录。
@@ -274,7 +274,7 @@ summary 的三档单价、计价基数、币种和可选来源直接读取 Trial
 表格导出保留缺失数值空白及部分数据的星号，maxTPM 命中率、缓存输入收入和总收入列仅输出数值及单位。summary 展示成功请求数；失败/取消计数、成功率、流式设置和 Trial 身份由底层结果保留。其余 reason 列沿用缺失原因，availability 元数据由底层指标和 ResultReader 保存，用于正确显示缺失和 partial；Excel 星号使用数字格式，单元格保持数值类型。
 应用Run配置必须显式提供单行case说明，作为Run证据保存并列在summary首列；低层 Coordinator 及历史库缺此证据时，描述列保留空白。Excel冻结首行与首列，首列按中英文显示宽度适配。静态与tabular导出共用文件锁和原子发布：同名子表先验证首列身份、唯一非空标题及行列上限，再按完整列名对齐追加。原有列和历史行保持原位，新指标列追加到末尾，缺失指标留空，单位属于列身份。缺少的子表创建，其余子表保留；校验失败保留原文件。含公式的追加数据要求列顺序保持原位。静态checkpoint只导出新增测试点，每次运行使用独立事实目录，支持共用工作簿及重复运行。
 每个 CSV 与 XLSX 的 artifact kind 唯一。
-默认 console 与 tabular（仅 XLSX），显式 tabular 设置替换默认实例。summary 直接读取 Trial overall
+默认 console 与 tabular（仅 XLSX），tabular 的 tables 默认选择 summary、minutes；requests 与 kv_capacity 按需选择，CSV 与 XLSX 共用该设置。请求事实继续完整写入原生结果。显式 tabular 设置替换默认实例。summary 直接读取 Trial overall
 已存统计值，前置运行参数，末尾保留核心 maxtpm；全局分位数按正式指标导出。生成请求默认temperature=0.1、最多4,096 token并保留自然 EOS，显式参数优先（包括temperature=0）；Chat 显式配置 max_tokens=null 时省略默认输出上限，逐轮正整数目标继续优先，实际请求事实与画像的目标可为 null。固定输出仍要求显式目标。静态Prefill/Decode同样默认temperature=0.1，保留各自显式输出目标。
 导出失败单独报告，已提交请求状态保持原值；导出命令可再次读取结果生成表格。
 
