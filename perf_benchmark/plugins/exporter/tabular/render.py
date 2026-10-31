@@ -12,6 +12,9 @@ from unicodedata import east_asian_width, combining
 
 from perf_benchmark.core.profiles import GENERATION_KEYS
 
+DEFAULT_TABLES = ("summary", "minutes")
+TABLE_NAMES = (*DEFAULT_TABLES, "requests", "kv_capacity")
+
 MEASURED = (
     "maxtpm",
     "maxtpm_minutes",
@@ -516,15 +519,19 @@ def units_in_headers(spec):
         tuple(row[i] for i in columns) for row in factory())
 
 
-def render_tables(run_id, reader, directory, formats, *, excel_path=None):
+def render_tables(run_id, reader, directory, formats, *, excel_path=None, table_names=DEFAULT_TABLES):
     if reader.summary(run_id)["status"] not in {"succeeded", "failed", "cancelled"}:
         raise ValueError("tabular export requires a terminal Run")
     directory = Path(directory)
     if directory == Path(reader.location).resolve():
         raise ValueError("tabular directory must not replace the result database")
     directory.mkdir(parents=True, exist_ok=True)
-    summary, *details = tables(run_id, reader)
-    specs = tuple(scale_maxtpm(spec) for spec in (compact_summary(summary), *details))
+    specs = tuple(
+        scale_maxtpm(compact_summary(spec) if spec[0] == "summary" else spec)
+        for spec in tables(run_id, reader) if spec[0] in table_names
+    )
+    if not specs:
+        raise ValueError("selected tables have no available data")
     filenames = ([name + ".csv" for name, _, _ in specs] if "csv" in formats else []) + (
         ["results.xlsx"] if "xlsx" in formats else []
     )

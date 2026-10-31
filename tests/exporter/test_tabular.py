@@ -450,7 +450,7 @@ async def test_summary_uses_global_distributions_and_places_parameters_first(tmp
         assert row["input_revenue_per_minute_reason"] == "metric_not_recorded"
         assert "maxtpm_start_ns" not in row
         assert all(b"SECRET" not in workbook.read(name) for name in workbook.namelist())
-        assert len(workbook.read("xl/workbook.xml").split(b"<sheet ")) - 1 == 3
+        assert len(workbook.read("xl/workbook.xml").split(b"<sheet ")) - 1 == 2
         assert b'name="metrics"' not in workbook.read("xl/workbook.xml")
 
 
@@ -537,7 +537,8 @@ async def test_sqlite_csv_excel_export_same_minute_revenue_and_request_usage(
     finally:
         await sink.close()
     output = tmp_path / "tables"
-    result = await TabularExporter(parse_settings({"output": str(output), "formats": ["csv", "xlsx"]})).export(
+    result = await TabularExporter(parse_settings({"output": str(output), "formats": ["csv", "xlsx"],
+                                                  "tables": ["summary", "minutes", "requests"]})).export(
         run.id, reader, stage_context("exporter")
     )
     assert len(result.outputs) == 4
@@ -626,11 +627,17 @@ async def test_sqlite_csv_excel_export_same_minute_revenue_and_request_usage(
                        for key in next(csv.reader(stream)))
     # Existing SQLite can also be exported through the offline application entrypoint.
     offline = await export_tables(db, tmp_path / "offline", ["csv"])
-    assert len(offline.outputs) == 3
+    assert len(offline.outputs) == 2
     assert read_csv(tmp_path / "offline" / "summary.csv") == [summary]
+    assert not (tmp_path / "offline" / "requests.csv").exists()
+    await export_tables(db, tmp_path / "request-details", ["csv"], tables=["requests"])
+    assert read_csv(tmp_path / "request-details" / "requests.csv") == rows
     default = await TabularExporter(parse_settings({})).export(run.id, reader, stage_context("exporter"))
     assert [item.location for item in default.outputs] == [str(tmp_path / "run-tables" / "results.xlsx")]
     assert not list((tmp_path / "run-tables").glob("*.csv"))
+    with ZipFile(tmp_path / "run-tables" / "results.xlsx") as workbook:
+        assert len(workbook.read("xl/workbook.xml").split(b"<sheet ")) - 1 == 2
+        assert b'name="requests"' not in workbook.read("xl/workbook.xml")
 
 
 async def test_partial_cost_is_numeric_in_excel_and_marked_in_csv(tmp_path, stage_context):
@@ -677,6 +684,10 @@ async def test_partial_cost_is_numeric_in_excel_and_marked_in_csv(tmp_path, stag
         {"formats": ["pdf"]},
         {"output": ""},
         {"unknown": True},
+        {"tables": []},
+        {"tables": "requests"},
+        {"tables": ["summary", "summary"]},
+        {"tables": ["metrics"]},
     ],
 )
 def test_tabular_settings_validation(settings):
@@ -708,7 +719,8 @@ async def test_tabular_pages_requests_and_preserves_existing_on_read_failure(
             }
 
     output = tmp_path / "output"
-    await TabularExporter(parse_settings({"output": str(output), "formats": ["csv"]})).export(
+    await TabularExporter(parse_settings({"output": str(output), "formats": ["csv"],
+                                         "tables": ["requests"]})).export(
         "run", Paged(), stage_context("exporter")
     )
     assert len(read_csv(output / "requests.csv")) == 1001
@@ -721,10 +733,52 @@ async def test_tabular_pages_requests_and_preserves_existing_on_read_failure(
             return super().request_page(*args, **kwargs)
 
     with pytest.raises(RuntimeError, match="read failed"):
-        await TabularExporter(parse_settings({"output": str(output)})).export(
+        await TabularExporter(parse_settings({"output": str(output), "tables": ["requests"]})).export(
             "run", Failed(), stage_context("exporter")
         )
     assert (output / "requests.csv").read_bytes() == before
+
+
+async def test_default_tables_keep_capacity_in_summary_without_paging_request_details(tmp_path, stage_context):
+    from tests.exporter.test_console import Reader
+
+    class Results(Reader):
+        location = str(tmp_path / "facts.db")
+
+        def measurements(self, *args, **kwargs):
+            return {"evidence": {"service_capacity": {"pools": [
+                {"tier": "gpu", "pool": "gpu-0", "capacity_tokens": 1234,
+                 "status": "available", "source": "engine"}
+            ]}}}
+
+        def request_page(self, run_id, **kwargs):
+            assert kwargs["scope"] == "turn" and kwargs["offset"] == 0
+            return {"items": (), "total": 1001}
+
+    output = tmp_path / "tables"
+    await TabularExporter(parse_settings({"output": str(output), "formats": ["csv", "xlsx"]})).export(
+        "run", Results(), stage_context("exporter"))
+    assert {p.name for p in output.iterdir()} == {"summary.csv", "minutes.csv", "results.xlsx"}
+    assert read_csv(output / "summary.csv")[0]["gpu_kv_capacity_tokens (token)"] == "1234"
+    with ZipFile(output / "results.xlsx") as workbook:
+        sheets = ET.fromstring(workbook.read("xl/workbook.xml"))
+        assert [s.get("name") for s in sheets.iter() if s.tag.endswith("}sheet")] == ["summary", "minutes"]
+
+    from perf_benchmark.app.main import parser
+
+    args = parser().parse_args(
+        ["export", "facts.db", "--output", "tables", "--tables", "requests"])
+    assert args.tables == ["requests"]
+
+    class WithoutCapacity(Results):
+        def measurements(self, *args, **kwargs):
+            return {}
+
+    with pytest.raises(ValueError, match="selected tables have no available data"):
+        await TabularExporter(parse_settings({"output": str(tmp_path / "empty"),
+                                             "tables": ["kv_capacity"]})).export(
+            "run", WithoutCapacity(), stage_context("exporter"))
+    assert not (tmp_path / "empty" / "results.xlsx").exists()
 
 
 async def test_summary_keeps_columns_observed_in_any_trial_and_unavailable_reasons(

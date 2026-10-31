@@ -739,7 +739,7 @@ uv run perf-benchmark report /absolute/results/run-001.db --output /absolute/res
 
 ### CSV / Excel 导出
 
-每次运行默认输出终端摘要并生成一份 `results.xlsx`，`exporter: {}` 即可。CSV 通过 `formats: [csv, xlsx]` 显式开启。
+每次运行默认输出终端摘要并生成一份 `results.xlsx`，包含 `summary`、`minutes` 两张表，`exporter: {}` 即可。CSV 通过 `formats: [csv, xlsx]` 显式开启。
 输出目录自动取 SQLite 同级的 `<数据库文件名去掉扩展名>-tables/`，例如
 `/absolute/results/run-001.db` 对应 `/absolute/results/run-001-tables/results.xlsx`。
 需要自定义目录或额外 CSV 时，在 YAML 的 `pipeline.exporter` 中填写：
@@ -755,9 +755,11 @@ exporter:
 ```
 
 `output` 填输出目录，相对路径按 YAML 所在目录解析；`formats` 可填 `[csv]`、`[xlsx]` 或两者。
+`tables` 选择导出的表，默认 `[summary, minutes]`。请求明细使用 `[summary, minutes, requests]`；
+独立容量明细可加 `kv_capacity`。容量总量继续显示在 `summary`，完整请求事实保存在 SQLite / 同身份 Parquet。
 可另设 `excel_path: results/glm-comparison.xlsx` 指定Excel文件路径。首次导出创建文件；追加导出时，同名子表按完整列名对齐后追加本次Run的数据。原有列顺序和历史行保留，新指标列追加到末尾，各次测试缺失的指标保持空白。列名中的单位参与匹配，单位不同的指标分别保存。首列标题须一致，所有标题须为唯一的非空文本；校验失败时原文件保留。缺少的子表自动创建，其余子表保留。数值类型、部分可用标记和单元格样式沿用原生导出。该设置只控制Excel，CSV仍写到 `output`。
 
-静态 Prefill、Decode 和多轮对话可以共用一个工作簿：把静态配置的 `output.excel_path` 与多轮配置中 `pipeline.exporter.plugins` 列表内 tabular 的 `settings.excel_path` 指向同一个文件。静态结果写入 `Prefill性能测试`、`Decode性能测试` 等子表；多轮结果写入 `summary`、`minutes`、`requests`，采集服务容量时另附 `kv_capacity`。每次导出在文件锁内校验并原子追加，case 标识各次测试。相对路径分别以各自 YAML 所在目录解析。
+静态 Prefill、Decode 和多轮对话可以共用一个工作簿：把静态配置的 `output.excel_path` 与多轮配置中 `pipeline.exporter.plugins` 列表内 tabular 的 `settings.excel_path` 指向同一个文件。静态结果写入 `Prefill性能测试`、`Decode性能测试` 等子表；多轮结果默认写入 `summary`、`minutes`，附表由 `tables` 显式选择。每次导出在文件锁内校验并原子追加，case 标识各次测试，已有其他子表继续保留。相对路径分别以各自 YAML 所在目录解析。
 
 ```yaml
 exporter:
@@ -767,7 +769,9 @@ exporter:
       excel_path: results/glm-comparison.xlsx
       formats: [xlsx]
 ```
-默认只导出 Excel；显式填写 `[csv, xlsx]` 会同时生成 `summary.csv`、`minutes.csv`、`requests.csv`，采集服务容量时另附 `kv_capacity.csv`，可以同 HTML 导出器一起配置。
+默认只导出 Excel；显式填写 `[csv, xlsx]` 会同时生成 `summary.csv`、`minutes.csv`。CSV 与 Excel 使用同一份 `tables` 设置，可以同 HTML 导出器一起配置。
+
+需要请求附表时，在 tabular 的 `settings` 中设置 `tables: [summary, minutes, requests]`。
 
 常规性能测试建议保持 `exporter: {}`，保存原生 SQLite/Parquet 与一份 Excel。
 HTML 和 CSV 通过 `report`、`export` 按需从已保存的原生结果生成。
@@ -788,10 +792,10 @@ Excel 和历史明文日志保留。精简对象限于已结束、WAL 为空且�
 |---|---|
 | `summary.csv` / `summary` | 每个测试配置一行：前几列为模型、实际平均输入/输出 token、并发、活跃用户数和生成参数；后面是全局延迟、长度及会话指标的 mean/P50/P90/P99，prefill/decode 速度的 time_weighted_mean/P50/P90/P99，成功请求数、吞吐、token 总量及费用；末尾为 maxtpm、输入/输出 TPM、分钟数、命中率、收入及同窗延迟和prefill/decode速度、样本数与输出吞吐 |
 | `minutes.csv` / `minutes` | 同一窗口内每个完整分钟的 token 用量、命中率和收入，保留零请求分钟 |
-| `requests.csv` / `requests` | 每次 Attempt 及最终 Turn 的实际输入、输出、缓存命中/未命中 token、命中率、状态和响应完成时间 |
-Excel/CSV 的导出表为 `summary`、`minutes`、`requests` 及可选的 `kv_capacity`。全部测试窗口的原始指标、统计量、单位及缺失原因保留在 SQLite / 同身份 Parquet。
+| `requests.csv` / `requests`（按需） | 每次 Attempt 及最终 Turn 的实际输入、输出、缓存命中/未命中 token、命中率、状态和响应完成时间 |
+Excel/CSV 默认导出 `summary`、`minutes`，可选 `requests`、`kv_capacity`。全部测试窗口的原始指标、统计量、单位及缺失原因保留在 SQLite / 同身份 Parquet。
 
-Excel 文件为 `results.xlsx`，包含上面三张表；配置服务容量时另含 `kv_capacity`。`scope` 区分 `attempt` 与 `turn`，
+Excel 文件为 `results.xlsx`，默认包含两张汇总表。启用 `requests` 后，`scope` 区分 `attempt` 与 `turn`，
 汇总请求用量时选择一种范围。命中率为 0–1 的数值，未知值留空。maxTPM 命中率、缓存输入收入和总收入仅展示数值及单位；完整缺失原因、失败/取消计数、成功率、流式设置和 Trial 身份保存在 SQLite / 同身份 Parquet。其余保留的 reason 列说明对应指标缺失原因，原始指标继续保存可用性元数据。
 `*` 表示该汇总存在数据缺失。Excel 使用数字格式显示星号，单元格仍是数值；CSV 在数值后追加星号。
 `summary` 的全局值直接读取同一 Trial 的 `overall` 指标窗口，分位数按全局请求样本统计。
@@ -809,6 +813,12 @@ summary 同时展示该 Trial 冻结的 `input_price`、`cached_input_price`、`
 
 ```bash
 uv run perf-benchmark export /absolute/results/run-001.db --output /absolute/results/tables --formats csv xlsx
+```
+
+按需从已有结果导出请求明细：
+
+```bash
+uv run perf-benchmark export /absolute/results/run-001.db --output /absolute/results/details --tables requests
 ```
 
 单轮、多轮、开环、闭环、并发扫描和自动 SLO 搜索的配置片段见第 4 节。
@@ -948,7 +958,7 @@ compare 检查数据、筛选、tokenizer、seed、协议、生成、部署和�
 结果位置由 YAML 的 `pipeline.saver.settings.path` 指定。
 相对路径按 YAML 目录解析；三份使用示例默认落在 `examples/debug/results/`。
 正式任务建议指定独立绝对路径。
-默认保存 SQLite 和一份 Excel；Excel 位于 SQLite 同级的 `<数据库名>-tables/results.xlsx`。
+默认保存 SQLite 和一份包含 `summary`、`minutes` 的 Excel；Excel 位于 SQLite 同级的 `<数据库名>-tables/results.xlsx`。
 显式配置 exporter 的 `output` 可覆盖表格目录；report/export 也可在事后从 SQLite 派生。
 
 仓库根目录执行以下示例时，默认结果位置为：
@@ -960,7 +970,7 @@ compare 检查数据、筛选、tokenizer、seed、协议、生成、部署和�
 | `examples/multi-turn.yaml` | `examples/debug/results/multi-turn-001.db` | `examples/debug/results/multi-turn-001-tables/results.xlsx` |
 
 SQLite 保存请求事实、指标及必要元数据；请求正文使用生命周期内的临时存储，鉴权来自环境变量。
-requests 表格保存 Attempt 和最终 Turn 明细，行数随实际请求数量增长；完整原始指标保存在 SQLite / 同身份 Parquet。汇总用量时选择
+按需导出的 requests 表格保存 Attempt 和最终 Turn 明细，行数随实际请求数量增长；完整原始指标保存在 SQLite / 同身份 Parquet。汇总用量时选择
 requests 中的 attempt 或 turn 一种 scope。运行中的事实写入 SQLite，收尾后封存 Parquet；
 统一 ResultReader 自动路由结果，派生 CSV/XLSX 可按需重导出。
 

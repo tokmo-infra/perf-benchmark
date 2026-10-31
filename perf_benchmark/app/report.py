@@ -19,12 +19,17 @@ async def generate(database: Path, output: Path, grafana_url: str = '') -> Expor
     return await exporter.export(run_ids[0], reader, ExporterContext(Path.cwd(), CancellationToken()))
 
 
-async def export_tables(database: Path, output: Path, formats: list[str]) -> ExportResult:
+async def export_tables(
+    database: Path, output: Path, formats: list[str], *, tables: list[str] | None = None
+) -> ExportResult:
     from perf_benchmark.plugins.exporter.tabular import TabularExporter, parse_settings
 
     reader = await asyncio.to_thread(SQLiteSaver.open_reader, str(database))
     run_ids = await asyncio.to_thread(reader.run_ids)
     if len(run_ids) != 1:
         raise ValueError('export requires exactly one Run per database')
-    exporter = TabularExporter(parse_settings({'output': str(output), 'formats': formats}))
+    settings = {'output': str(output), 'formats': formats}
+    if tables is not None:
+        settings['tables'] = tables
+    exporter = TabularExporter(parse_settings(settings))
     return await exporter.export(run_ids[0], reader, ExporterContext(Path.cwd(), CancellationToken()))

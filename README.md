@@ -71,7 +71,7 @@ uv run perf-benchmark report examples/debug/results/source-only-001.db --output 
 uv run perf-benchmark export examples/debug/results/source-only-001.db --output examples/debug/results/source-only-001-tables --formats csv xlsx
 ```
 
-每次运行默认保存 SQLite 和 `<数据库名>-tables/results.xlsx`；`exporter: {}` 启用终端摘要和 Excel 导出。Excel保留 `summary`、`minutes`、`requests`，采集服务容量时另附 `kv_capacity`：按独立池记录GPU/CPU可缓存token数、时间、来源及未知原因。完整原始指标保存在 SQLite / 同身份 Parquet。固定单位并入列标题，例如 `ttft_mean (s)`，长表按行保留单位。显式指定 `--formats csv xlsx` 会额外生成对应CSV。`summary` 前几列放模型、平均输入/输出长度、并发、活跃用户数与生成参数，后面是全局mean/P50/P90/P99，末尾是精简的maxtpm/收入。静态prefill/decode每点默认至少三轮请求配额，并显示有效样本量与P99样本提示。先看Run状态与缺失原因，再比较吞吐和时延。每次测试使用新的数据库文件名。
+每次运行默认保存 SQLite 和 `<数据库名>-tables/results.xlsx`；`exporter: {}` 启用终端摘要和 Excel 导出。Excel 默认保留 `summary`、`minutes`。tabular 的 `settings.tables: [summary, minutes, requests]` 可开启请求附表，`kv_capacity` 可按需加入；离线导出使用 `--tables requests` 获取请求明细。完整原始指标保存在 SQLite / 同身份 Parquet。固定单位并入列标题，例如 `ttft_mean (s)`，长表按行保留单位。显式指定 `--formats csv xlsx` 会额外生成所选表的CSV。`summary` 前几列放模型、平均输入/输出长度、并发、活跃用户数与生成参数，后面是全局mean/P50/P90/P99，末尾是精简的maxtpm/收入。静态prefill/decode每点默认至少三轮请求配额，并显示有效样本量与P99样本提示。先看Run状态与缺失原因，再比较吞吐和时延。每次测试使用新的数据库文件名。
 
 浏览器结果工作台需要先构建前端资源，构建产物保留本地：
 
