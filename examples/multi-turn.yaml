@@ -61,3 +61,4 @@ pipeline:
       - plugin: tabular
         settings:
           excel_path: results/performance.xlsx # 与 static-benchmark.yaml 共用，按子表追加。
+          tables: [summary, minutes] # 加入 requests 可导出请求明细。
