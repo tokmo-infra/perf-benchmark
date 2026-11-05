@@ -21,3 +21,4 @@ class NativeResult(NamedTuple):
     trigger_ns: int | None
     decision_ns: int | None
     applied_ns: int | None
+    transport_sent_ns: int | None = None

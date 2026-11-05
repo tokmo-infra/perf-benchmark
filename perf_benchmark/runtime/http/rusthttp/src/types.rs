@@ -25,6 +25,7 @@ pub struct Plan {
 }
 #[derive(Default)]
 pub struct Outcome {
+    pub transport_sent_ns: Option<i64>,
     pub started_ns: Option<i64>,
     pub completed_ns: Option<i64>,
     pub http_status: Option<u16>,

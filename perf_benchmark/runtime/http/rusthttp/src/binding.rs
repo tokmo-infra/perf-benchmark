@@ -180,11 +180,14 @@ impl NativeTrial {
             let (outcome, delivered) = tokio::select! {
                 biased;
                 value = &mut result_rx => {
+                    latch_safety(&inner.state, &value);
                     let delivered = deliver_result(&loop_ref, &result_notify, value);
                     (execution.await, delivered)
                 }
                 outcome = &mut execution => {
-                    let delivered = deliver_result(&loop_ref, &result_notify, result_rx.await);
+                    let value = result_rx.await;
+                    latch_safety(&inner.state, &value);
+                    let delivered = deliver_result(&loop_ref, &result_notify, value);
                     (outcome, delivered)
                 }
             };
@@ -300,6 +303,54 @@ impl NativeTrial {
             }
             Ok(())
         })
+    }
+}
+// Cancel all transport tasks and prohibit any new submission BEFORE acquiring
+// the Python GIL or waiting for the engine's cancellation watcher.
+fn latch_safety(state: &Mutex<State>, outcome: &Result<Outcome, oneshot::error::RecvError>) {
+    if outcome
+        .as_ref()
+        .is_ok_and(|o| o.error_origin == Some("safety"))
+    {
+        let mut state = state.lock().unwrap();
+        state.closed = true;
+        for (_, token) in state.tasks.values() {
+            token.cancel();
+        }
+    }
+}
+
+#[cfg(test)]
+mod safety_latch_tests {
+    use super::*;
+    #[test]
+    fn safety_latch_cancels_only_this_native_trial_and_closes_admission() {
+        let a = CancellationToken::new();
+        let b = CancellationToken::new();
+        let unrelated = CancellationToken::new();
+        let state = Mutex::new(State {
+            closed: false,
+            error: None,
+            sequence: 2,
+            tasks: HashMap::from([(1, ("s1".into(), a.clone())), (2, ("s2".into(), b.clone()))]),
+        });
+        latch_safety(
+            &state,
+            &Ok(Outcome {
+                error_origin: Some("service"),
+                ..Default::default()
+            }),
+        );
+        assert!(!a.is_cancelled());
+        latch_safety(
+            &state,
+            &Ok(Outcome {
+                error_origin: Some("safety"),
+                ..Default::default()
+            }),
+        );
+        assert!(a.is_cancelled() && b.is_cancelled() && state.lock().unwrap().closed);
+        assert!(!unrelated.is_cancelled());
     }
 }
 #[derive(Default)]
@@ -518,6 +569,7 @@ fn result_into_py(py: Python<'_>, value: Outcome) -> PyResult<Py<PyAny>> {
         value.trigger_ns.into_py_any(py)?,
         value.decision_ns.into_py_any(py)?,
         value.applied_ns.into_py_any(py)?,
+        value.transport_sent_ns.into_py_any(py)?,
     ];
     class.call1(py, PyTuple::new(py, fields)?)
 }

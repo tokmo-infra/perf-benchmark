@@ -6,6 +6,7 @@ from perf_benchmark.pipeline.contracts.observation import TraceContext
 import asyncio
 import gc
 import math
+import logging
 from contextlib import suppress
 from dataclasses import asdict
 from functools import partial
@@ -25,6 +26,9 @@ from perf_benchmark.pipeline.contracts.scheduler import (
     TurnStrategy,
 )
 from perf_benchmark.pipeline.resources import finish_task
+from perf_benchmark.pipeline.execution.underfill import UnderfillStop
+
+logger = logging.getLogger(__name__)
 
 class ExecutionEngine:
     def __init__(
@@ -59,6 +63,83 @@ class ExecutionEngine:
         self.resource_tasks: set[asyncio.Future] = set()
         self.resource_errors: list[BaseException] = []
         self.scheduling_fact: TrialSchedulingFact | None = None
+        self.underfill: UnderfillStop | None = None
+        self.underfill_watcher: asyncio.Task | None = None
+        self._in_flight_handoff_lock = asyncio.Lock()
+        if hasattr(self.runtime, "safety_observer"):
+            self.runtime.safety_observer = self._safety_abort
+
+    def enable_underfill_stop(self, session_count: int, turn_count: int, target: int, start_percent=55):
+        if self.underfill is not None:
+            raise RuntimeError("underfill stop is already enabled")
+        self.underfill = UnderfillStop(self.trial.id, session_count, turn_count, target, start_percent)
+        self.metrics.observe_facts(self.underfill.observe)
+        self.diagnostics = lambda: dict(
+            self.occupancy, trial_id=self.trial.id, underfill_stop=self.underfill.snapshot(),
+            http500_attempts=self.metrics.http500_attempts,
+        )
+        self.underfill_watcher = asyncio.create_task(self._watch_underfill())
+
+    def _safety_abort(self, request):
+        # Native transport has already cancelled this overdue in-flight attempt.
+        # Stop the WHOLE trial, not just the offending request, before any await.
+        self.ctx.cancellation.cancel('ttft_watchdog_safety_abort')
+        if self.underfill is not None:
+            self.underfill.hold('ttft_watchdog_safety_abort')
+        from perf_benchmark.pipeline.execution.stop_notice import emit_safety_notice
+        emit_safety_notice(self.domain_run.id, self.trial.id, request, self.occupancy)
+
+    def _advance_undispatched_fences(self, at_ns):
+        assert self.underfill is not None
+        # All fields and the transition to transport_invoked are owned by this
+        # event loop. No await may split the check from the floor update.
+        for control in self.controls.values():
+            if not control.transport_invoked and control.result is None:
+                self.underfill.advance_undispatched_turn(control.turn.id, at_ns)
+
+    async def _watch_underfill(self):
+        assert self.underfill is not None
+        control = self.underfill
+        polls = 0
+        try:
+            while not self.ctx.cancellation.is_cancelled():
+                await asyncio.sleep(1)
+                at_ns = perf_counter_ns()
+                self._advance_undispatched_fences(at_ns)
+                decision = control.poll(at_ns)
+                self.trial.measurements.diagnostics["underfill_stop"] = control.snapshot()
+                polls += 1
+                if polls % 10 == 1 or decision is not None or control.hold_reason:
+                    logger.info("underfill progress trial=%s in_flight=%s accepted_http500=%s proof=%s",
+                                self.trial.id, self.occupancy["in_flight"],
+                                self.metrics.http500_attempts, control.snapshot())
+                if control.hold_reason:
+                    logger.warning("underfill stop HOLD trial=%s reason=%s; natural completion only",
+                                   self.trial.id, control.hold_reason)
+                    return
+                if decision is not None:
+                    # Ack exactly the proof already closed by producer fences.
+                    # Do not create a NEW proof after flush and call it committed.
+                    await self.metrics.flush()
+                    await self.sink.flush()
+                    if self.ctx.cancellation.is_cancelled() or control.hold_reason:
+                        return
+                    if not control.ready_to_stop(perf_counter_ns()):
+                        continue  # ack may race the last unstarted Turn's admission
+                    # No await between proof, idempotence marker and native cancel.
+                    control.request_stop(perf_counter_ns())
+                    self.ctx.cancellation.cancel(
+                        f"concurrency_under_target_60s_after_{control.start_percent:g}_percent")
+                    from perf_benchmark.pipeline.execution.stop_notice import emit_stop_notice
+                    emit_stop_notice(self.domain_run.id, self.trial.id, control.snapshot())
+                    logger.info("underfill stop requested trial=%s proof=%s",
+                                self.trial.id, control.snapshot())
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            control.hold(f"stop_observer_failed:{type(exc).__name__}")
+            logger.exception("underfill observer failed; no stop proof, natural completion only")
 
     def open_ready_window(self, capacity: int) -> None:
         if capacity <= 0:
@@ -173,6 +254,15 @@ class ExecutionEngine:
             self.controls[session.id].cancel(reason)
 
     async def close(self) -> None:
+        if self.underfill_watcher is not None:
+            self.underfill_watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.underfill_watcher
+            assert self.underfill is not None
+            self.underfill.closed = True
+            if self.underfill.active or self.underfill.pending_occupancy:
+                self.underfill.hold("unsettled_producer_fences_at_close")
+            self.trial.measurements.diagnostics["underfill_stop"] = self.underfill.snapshot()
         # Release runtime even when emitting a lifecycle observation fails.
         try:
             await self._runtime_event(
@@ -222,6 +312,9 @@ class ExecutionEngine:
             return False, reason
         if turn.measurements.total_started_ns is None:
             turn.measurements.total_started_ns = perf_counter_ns()
+        if self.underfill is not None:
+            # Before TURN_STARTED, prepare, transport, release or observation awaits.
+            self.underfill.begin_turn(turn.id, session.ordinal, turn.ordinal, perf_counter_ns())
         turn.start()
         await self._scheduler_event(
             lifecycle.TURN_STARTED,
@@ -240,6 +333,8 @@ class ExecutionEngine:
             completed = False
             result = None
         if completed and result is None and control.stop_reason is not None:
+            if self.underfill is not None:
+                self.underfill.abandon_turn(turn.id)
             turn.status, turn.started_at = "pending", None
             turn.measurements.lifecycle = type(turn.measurements.lifecycle)()
             self.controls.pop(session.id, None)
@@ -321,24 +416,48 @@ class ExecutionEngine:
         self.occupancy[kind] += delta
         value = self.occupancy[kind]
         at_ns = perf_counter_ns()
+        if self.underfill is not None and kind == "in_flight":
+            await self._fenced_occupancy(at_ns, value)
+        else:
+            await self.metrics.wait_for_headroom()
+            self.metrics.record_occupancy(kind, at_ns, value)
         # Scheduling transitions may wait outside the raw HTTP timing window.
         # Recheck both writers here, including after a simultaneous completion
         # wave, before emitting nonblocking Attempt/Turn/Session facts.
-        await self.metrics.wait_for_headroom()
-        self.metrics.record_occupancy(kind, at_ns, value)
         await self._scheduler_event(
             lifecycle.SCHEDULER_CONCURRENCY_CHANGED,
             at_ns=at_ns,
             data={"kind": kind, "value": value},
         )
 
+    async def _fenced_occupancy(self, at_ns: int, value: int):
+        assert self.underfill is not None
+        self.underfill.capture_occupancy(at_ns, value)
+
+        async def handoff():
+            try:
+                # FIFO capture order is also native rowid order for timestamp ties.
+                async with self._in_flight_handoff_lock:
+                    await self.metrics.wait_for_headroom()
+                    self.metrics.record_occupancy("in_flight", at_ns, value)
+            except BaseException:
+                self.underfill.hold("occupancy_handoff_failed")
+                raise
+
+        # Cancellation must not drop an already captured fact. This is outside
+        # transport timing; finish_task joins the handoff before re-raising cancel.
+        await finish_task(asyncio.create_task(handoff()))
+
     async def record_queue(self, kind: str, value: int) -> None:
         # Queue transitions are scheduling facts, outside HTTP timing. Preserve
         # their original timestamp/value while waiting for reliable delivery.
         at_ns = perf_counter_ns()
         self.occupancy[kind] = value
-        await self.metrics.wait_for_headroom()
-        self.metrics.record_occupancy(kind, at_ns, value)
+        if self.underfill is not None and kind == "in_flight":
+            await self._fenced_occupancy(at_ns, value)
+        else:
+            await self.metrics.wait_for_headroom()
+            self.metrics.record_occupancy(kind, at_ns, value)
 
     def record_scheduling(self, fact: TrialSchedulingFact) -> None:
         if self.scheduling_fact is not None:
@@ -404,6 +523,7 @@ class TurnControl:
         self.cancel_reason = None
         self.stop_reason = None
         self.running = False
+        self.transport_invoked = False
         self.started_callback = None
 
         self.admission = SessionAdmission(
@@ -474,6 +594,8 @@ class TurnControl:
             if ctx.observation.enabled and ctx.observation.trace_mode != "benchmark" else None
         )
         result_ready_ns = None
+        transport_invoked = False
+        cleanup_cancelled = None
         fields = dict(
             stage="scheduler",
             trial_id=ctx.trial.id,
@@ -518,10 +640,21 @@ class TurnControl:
                 ready_slot = False
             await ctx.events.emit(lifecycle.REQUEST_QUEUED, **fields)
             await ctx.events.emit(lifecycle.TURN_ATTEMPT_STARTED, **fields)
+            if engine.underfill is not None:
+                # +1 mutates occupancy before awaiting its reliable handoff.
+                # Even cancellation of that await must release the occupancy.
+                occupied = True
             await engine._occupancy("in_flight", 1)
             occupied = True
+            transport_invoked = True
+            self.transport_invoked = True
             result = await engine.runtime.execute_attempt(prepared, self.signal)
             result_ready_ns = perf_counter_ns()
+            if engine.underfill is not None:
+                # The returned timestamp is now immutable, even if release or
+                # final Turn delivery blocks. Never promote a still-running HTTP
+                # request using the Python wall clock. Retries are disabled here.
+                engine.underfill.complete_attempt(turn.id, result, result_ready_ns)
         except SchedulingStopped as exc:
             self.stop_reason = exc.reason
             result = None
@@ -532,31 +665,46 @@ class TurnControl:
                 status="cancelled",
                 error=self.cancel_reason or ctx.cancellation.reason,
                 error_origin="client",
+                transport_timing_contract='not-dispatched-v1' if not transport_invoked else None,
             )
         finally:
             result_ready_ns = result_ready_ns or perf_counter_ns()
             self.running = False
             self.signal.close()
-            if ticket is not None and not admitted:
-                await engine.strategy.attempts.cancel(ticket)
-            if pending:
-                await engine._occupancy("request_pending", -1)
-            if ready_slot:
-                engine.ready_slots.release()
-            settlement = None
-            try:
-                if prepared is not None:
-                    settlement = await engine.runtime.release(prepared)
-            finally:
-                if resource_slot:
-                    engine.release_resource(settlement)
+
+            async def settle():
+                if ticket is not None and not admitted:
+                    await engine.strategy.attempts.cancel(ticket)
+                if pending:
+                    await engine._occupancy("request_pending", -1)
+                if ready_slot:
+                    engine.ready_slots.release()
+                settlement = None
                 try:
-                    if occupied:
-                        await engine._occupancy("in_flight", -1)
+                    if prepared is not None:
+                        settlement = await engine.runtime.release(prepared)
                 finally:
-                    if lease is not None:
-                        lease.release()
+                    if resource_slot:
+                        engine.release_resource(settlement)
+                    try:
+                        if occupied:
+                            await engine._occupancy("in_flight", -1)
+                    finally:
+                        if lease is not None:
+                            lease.release()
+
+            # Own ALL settlement, not just the occupancy handoff. Defer waiter
+            # cancellation until the already returned HTTP result is recorded.
+            # Actual cleanup/writer errors still propagate and fail the run.
+            cleanup = asyncio.create_task(settle())
+            try:
+                await finish_task(cleanup)
+            except asyncio.CancelledError as exc:
+                cleanup.result()
+                cleanup_cancelled = exc
         if result is None:
+            if cleanup_cancelled is not None:
+                raise cleanup_cancelled
             return None
         if not isinstance(result, AttemptResult) or (result.turn_id, result.attempt) != (
             turn.id,
@@ -592,7 +740,14 @@ class TurnControl:
         if admitted:
             engine.metrics.record_attempt(turn, result)
         else:
+            if cleanup_cancelled is not None:
+                raise cleanup_cancelled
             return result
+        if cleanup_cancelled is not None:
+            # self.result and the typed AttemptFact are durable handoff facts.
+            # The enclosing Turn can still be cancelled; do not forge success
+            # or replace this Attempt (including HTTP 500) with a synthetic one.
+            raise cleanup_cancelled
         await emit_attempt_observations(ctx, self.session, result)
         suffix = {"succeeded": "completed", "failed": "failed", "cancelled": "cancelled"}[
             result.status

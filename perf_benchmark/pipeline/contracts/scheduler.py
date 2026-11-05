@@ -72,6 +72,7 @@ class TrialPlan:
     )
     metadata: Mapping[str, JsonValue] = field(default_factory=lambda: MappingProxyType({}))
     validity_requirements: ValidityRequirements | None = None
+    stop_on_underfill: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:

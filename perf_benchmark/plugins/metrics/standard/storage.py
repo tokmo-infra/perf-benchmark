@@ -91,6 +91,10 @@ ATTEMPT_SCHEMA = pa.schema(
         ("offered_ns", pa.int64()),
         ("admitted_ns", pa.int64()),
         ("started_ns", pa.int64()),
+        ("http_status", pa.int64()),
+        ("completed_ns", pa.int64()),
+        ("transport_sent_ns", pa.int64()),
+        ("transport_observed", pa.bool_()),
     ]
 )
 

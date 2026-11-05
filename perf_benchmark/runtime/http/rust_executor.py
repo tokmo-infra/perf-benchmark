@@ -20,6 +20,7 @@ class RustHttpExecutorRuntime(RequestRuntime):
         self._background = set()
         self._background_errors = []
         self._opened = False
+        self.safety_observer = None
 
     async def prepare(self):
         if self._opened or self._close_task is not None:
@@ -87,9 +88,24 @@ class RustHttpExecutorRuntime(RequestRuntime):
                         await finish_task(started)
                     except asyncio.CancelledError:
                         started.result()
+            if value.error_origin == 'safety' and value.error == 'TTFTWatchdogExceeded':
+                observer = getattr(self, 'safety_observer', None)
+                if observer is None:
+                    self.cancellation.cancel('ttft_watchdog_safety_abort')
+                else:
+                    first = value.samples[0][1] if value.samples else None
+                    observer(dict(request_id=spec.headers.get('X-Request-ID'),
+                        turn_id=prepared.input.turn.id, attempt=prepared.input.attempt,
+                        sent_ns=value.transport_sent_ns, first_token_ns=first,
+                        first_token_pending=first is None, detected_ns=value.completed_ns,
+                        clock='shared_native_monotonic',
+                        basis='transport_dispatch_after_pool_acquire; excludes_tool_queue',
+                        native_client_start_ns=value.started_ns, reason='TTFTWatchdogExceeded'))
             result = AttemptResult(prepared.input.turn.id, prepared.input.attempt,
                                    request_facts=prepared.request_facts)
             result.status = value.status
+            result.transport_sent_ns = value.transport_sent_ns
+            result.transport_timing_contract = 'sent-dispatch-first-output-v1'
             result.error, result.error_origin = value.error, value.error_origin
             result.retryable = value.retryable
             result.usage = value.usage
@@ -120,7 +136,14 @@ class RustHttpExecutorRuntime(RequestRuntime):
             raise
         finally:
             signal.close()
-            settlement = await self.release(prepared)
+            # Retain an already returned real HTTP/safety outcome even when the
+            # whole-trial watcher cancels us during cleanup. Join, never replace
+            # the true Attempt with an artificial successful/cancelled result.
+            release = asyncio.create_task(self.release(prepared))
+            try:
+                settlement = await finish_task(release)
+            except asyncio.CancelledError:
+                settlement = release.result()
             if join_settlement and settlement is not None:
                 try:
                     await finish_task(settlement)

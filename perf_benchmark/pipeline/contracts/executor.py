@@ -178,6 +178,8 @@ class AttemptResult:
     applied_ns: int | None = None
     request_facts: TurnRequestFacts | None = None
     plan: AttemptPlan | None = None
+    transport_sent_ns: int | None = None
+    transport_timing_contract: str | None = None
 
 
 class AttemptControl(Protocol):

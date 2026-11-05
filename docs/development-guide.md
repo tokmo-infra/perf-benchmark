@@ -314,3 +314,8 @@ React 工作台从统一 ResultReader 读取正式指标；前端静态资源由
 完整开发仓库保留全部测试，源码交付用 `git archive` 并遵守 `.gitattributes` 的 `export-ignore` 清单，仅同步核心回归测试及其依赖。收件人获得 Python/Rust、前端源码和构建配置，在实际运行环境构建原生扩展、前端资源和安装包。
 
 调度器的`SessionRunner.record_queue`为异步接口，所有生产、消费、stop和因果预留路径必须等待指标队列余量。队列变化的时间和值在等待前捕获，保留原始调度事实；该等待不位于HTTP计时区间。高活跃会话验收必须覆盖真实producer/worker队列事件，不能只测试Saver会话记录突发。
+
+## 可选停测与完成队列诊断
+
+可选首遍欠并发停测、native 首输出 watchdog 和完成队列诊断的配置与证明边界见
+[停测与诊断说明](performance-stop.md)。这些工具侧事实不能替代服务侧 P+D 观测。

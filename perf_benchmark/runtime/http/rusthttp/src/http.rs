@@ -89,6 +89,12 @@ impl Http {
         let mut decode_error = None;
         let mut scenario_at = None;
         let mut scenario_deadline = None;
+        let safety = crate::watchdog::TtftWatchdog::default();
+        let safety_limit = std::env::var("PERF_TTFT_LIMIT_MS")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|n| *n > 0)
+            .map(|n| n.saturating_mul(1_000_000));
         let work = async {
             if !matches!(
                 cmd.connection_scope.as_str(),
@@ -174,6 +180,11 @@ impl Http {
             let received = loop {
                 let sent = async {
                     connection = Some(client.acquire(&url).await?);
+                    // Separate safety dispatch clock: scheduler/preparation/pool
+                    // acquisition are not time spent awaiting service first output.
+                    let sent_at = now();
+                    out.transport_sent_ns = Some(sent_at);
+                    safety.sent(sent_at);
                     connection
                         .as_mut()
                         .unwrap()
@@ -322,6 +333,9 @@ impl Http {
                     match decoder.feed(event.as_bytes(), true) {
                         Ok((chars, done)) => {
                             if chars > 0 {
+                                if out.samples.is_empty() {
+                                    safety.first(at);
+                                }
                                 let count = out.samples.len() as i64 + 1;
                                 out.samples.push([count, at, chars]);
                                 if cmd.plan.after_outputs.is_some_and(|n| count >= n) {
@@ -361,15 +375,22 @@ impl Http {
             Done,
             Cancel,
             Timeout,
+            Safety,
         }
         let end = tokio::select! {
             biased;
             _ = cancel.cancelled() => End::Cancel,
+            _ = safety.wait(safety_limit) => End::Safety,
             // Zero disables the TOTAL request deadline; explicit cancellation still works.
             _ = sleep_until(deadline), if cmd.timeout > 0.0 => End::Timeout,
             _ = work => End::Done,
         };
-        if matches!(end, End::Cancel) || cancel.is_cancelled() {
+        if matches!(end, End::Safety)
+            || safety_limit.is_some_and(|limit| safety.exceeded(now(), limit))
+        {
+            fail(&mut out, "safety", "TTFTWatchdogExceeded", false);
+            out.completed_ns = Some(now());
+        } else if matches!(end, End::Cancel) || cancel.is_cancelled() {
             cancelled(&mut out, "client", "cancelled", now(), false);
         } else if let Some(at) = scenario_at {
             let count_reached = cmd
@@ -409,7 +430,10 @@ impl Http {
         } else {
             Some(content.finish)
         };
-        if out.error_origin != Some("transport") && out.status != "cancelled" {
+        if out.error_origin != Some("transport")
+            && out.error_origin != Some("safety")
+            && out.status != "cancelled"
+        {
             if let Some(error) = decode_error.or(finish_error) {
                 let incomplete = matches!(error, DecodeError::Incomplete);
                 fail(
