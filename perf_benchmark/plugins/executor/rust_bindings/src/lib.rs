@@ -23,6 +23,7 @@ fn now() -> i64 {
 }
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("TTFT_WATCHDOG_CONTRACT", "sent-dispatch-first-output-v1")?;
     m.add_function(wrap_pyfunction!(create_trial, m)?)?;
     m.add_function(wrap_pyfunction!(now, m)?)?;
     m.add_class::<NativeTrial>()?;

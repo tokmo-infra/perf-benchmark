@@ -92,7 +92,8 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
             CREATE TEMP TABLE attempts(
               trial_id VARCHAR, turn_id VARCHAR, attempt BIGINT, status VARCHAR,
               origin VARCHAR, target_ns BIGINT, offered_ns BIGINT,
-              admitted_ns BIGINT, started_ns BIGINT
+              admitted_ns BIGINT, started_ns BIGINT, http_status BIGINT, completed_ns BIGINT,
+              transport_sent_ns BIGINT, transport_observed BOOLEAN
             );
             CREATE TEMP TABLE itl(
               trial_id VARCHAR, turn_id VARCHAR, value DOUBLE
@@ -180,6 +181,11 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
                             fact.offered_ns,
                             fact.admitted_ns,
                             fact.request_ns,
+                            fact.http_status if type(fact.http_status) is int else None,
+                            fact.response_completed_ns if fact.response_completed_ns is not None else fact.turn_completed_ns,
+                            fact.metadata.get('_perf_transport_sent_ns'),
+                            fact.metadata.get('_perf_transport_timing_contract') in
+                                ('sent-dispatch-first-output-v1', 'not-dispatched-v1'),
                         )
                     )
                     output.append(MetricUpdate("attempt", fact.id, metrics, fact.attempts))
@@ -293,6 +299,10 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
             extra_points, extra_windows, extra_diagnostics = dataset_maxtpm(self, fact, bounds, occupancy)
             points.extend(extra_points)
             window_rows.extend(extra_windows)
+        if self.settings.get("maxtpm"):
+            from perf_benchmark.plugins.metrics.standard.cohort_diagnostics import completion_diagnostics
+            extra_diagnostics.update(completion_diagnostics(
+                self, fact, window_rows, extra_diagnostics, occupancy))
         points.extend(self.billing.finalize_trial(self, trial_id))
         validity = assess(self, fact, points, windows)
         self.db.execute(

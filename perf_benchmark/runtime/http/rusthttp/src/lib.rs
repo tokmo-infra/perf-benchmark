@@ -4,6 +4,7 @@ pub mod http;
 pub mod sse;
 mod transport;
 pub mod types;
+mod watchdog;
 use std::collections::BTreeMap;
 pub use types::Command;
 

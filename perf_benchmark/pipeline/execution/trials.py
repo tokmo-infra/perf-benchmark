@@ -49,6 +49,7 @@ def _plan_parameters(plan: TrialPlan, *, stop_source: str) -> dict:
         "comparison": asdict(plan.comparison) if plan.comparison is not None else None,
         "repetition": asdict(plan.repetition),
         "validity_requirements": asdict(plan.validity_requirements) if plan.validity_requirements else None,
+        **({"stop_on_underfill": True} if plan.stop_on_underfill else {}),
         "request_parameters": thaw_snapshot(plan.request_parameters),
     }
 
@@ -86,7 +87,6 @@ class TrialController:
                 raise ValueError("one graph exceeds max_active_sessions")
             if self.streaming_input.requires_start_notifications and not self.executor_plugin.supports_start_notifications:
                 raise ValueError("causal replay requires reliable execution start notifications")
-        self.active = True
         stop_source = "scheduler"
         if plan.stop.session_count is None and plan.stop.duration_s is None:
             plan = replace(
@@ -98,6 +98,26 @@ class TrialController:
             )
             stop_source = "selector"
         ordinal = len(self.run.trial_ids)
+        if plan.stop_on_underfill:
+            # Truncating a larger corpus via scheduler.stop does not change the
+            # native denominator, which is the full selected corpus.
+            metrics_binding = self.ctx.binding("metrics")
+            if (not isinstance(metrics_binding, StageBinding)
+                    or metrics_binding.name != "standard"
+                    or not metrics_binding.settings.get("maxtpm")
+                    or plan.load_profile.mode != "multi-turn-closed-loop"
+                    or plan.stop.duration_s is not None
+                    or plan.stop.on_exhausted == "cycle"
+                    or plan.stop.session_count != self.streaming_input.session_count
+                    or plan.repetition.expected != 1):
+                raise ValueError("stop_on_underfill requires standard maxtpm, "
+                                 "one complete selected corpus and a finite closed-loop Trial")
+            from perf_benchmark.pipeline.maxtpm import resolve_start_percent
+            start_percent, _ = resolve_start_percent(
+                metrics_binding.settings, self.streaming_input.session_count,
+                plan.load_profile.target_concurrency)
+            if start_percent == 0:
+                raise ValueError("stop_on_underfill does not support a zero-percent start")
         trial = Trial(
             id=f"{self.run.id}:trial-{ordinal + 1}",
             name=plan.name,
@@ -109,6 +129,7 @@ class TrialController:
         metrics = close_engine = close_metrics = close_stream = engine = None
         error = None
         execution = None
+        self.active = True
         try:
             async with AsyncExitStack() as resources:
                 try:
@@ -198,6 +219,13 @@ class TrialController:
                     if ready:
                         engine.open_ready_window(plan.resources.ready_capacity)
                         trial.start()
+                        if plan.stop_on_underfill:
+                            engine.enable_underfill_stop(
+                                self.streaming_input.session_count, self.streaming_input.turn_count,
+                                plan.load_profile.target_concurrency,
+                                start_percent,
+                            )
+                            self.diagnostics = engine.diagnostics
                         if self.progress is not None:
                             self.progress.begin_trial(trial)
                         await self.sink.write_trial(trial)
@@ -283,6 +311,9 @@ class TrialController:
         if metrics is not None:
             try:
                 report = await metrics.finalize(trial, fact)
+                if engine is not None and engine.underfill is not None:
+                    engine.underfill.reconcile(report.diagnostics)
+                    trial.measurements.diagnostics["underfill_stop"] = engine.underfill.snapshot()
                 points, validity = report.points, report.validity
                 fact = replace(fact, validity=validity)
                 await self.sink.write_metric_points(points)

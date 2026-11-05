@@ -72,6 +72,7 @@ tests/metrics/test_maxtpm_billing.py -export-ignore
 tests/metrics/test_maxtpm_auto_start.py -export-ignore
 tests/metrics/test_standard.py -export-ignore
 tests/metrics/test_incremental_metrics.py -export-ignore
+tests/metrics/test_decode_coverage_diagnostics.py -export-ignore
 tests/metrics/test_validity.py -export-ignore
 tests/normalization/test_open_swe_traces.py -export-ignore
 tests/normalization/test_open_swe_tool_ids.py -export-ignore
@@ -84,6 +85,10 @@ tests/pipeline/test_coordinator.py -export-ignore
 tests/pipeline/test_progress.py -export-ignore
 tests/pipeline/test_resources.py -export-ignore
 tests/pipeline/test_execution.py -export-ignore
+tests/pipeline/test_underfill_http_regression.py -export-ignore
+tests/pipeline/test_underfill_native_reconciliation.py -export-ignore
+tests/pipeline/test_underfill_stop.py -export-ignore
+tests/pipeline/test_underfill_stop_integration.py -export-ignore
 tests/pipeline/test_parallel_preparation.py -export-ignore
 tests/pipeline/test_streaming.py -export-ignore
 tests/result_records.py -export-ignore

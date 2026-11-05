@@ -179,11 +179,30 @@ class MetricsCollector:
     def __init__(self, runtime, trial_id):
         self.runtime, self.trial_id = runtime, trial_id
         self.closed = self.finalized = False
+        self._fact_observer = None
+        self.attempts_observed = self.http500_attempts = self.http_status_unknown_attempts = 0
+
+    def observe_facts(self, observer):
+        """Install one synchronous owner observer, not a lossy background Hook."""
+        if self._fact_observer is not None or self.closed or self.finalized:
+            raise RuntimeError("metrics fact observer is already installed or closed")
+        self._fact_observer = observer
+
+    async def flush(self):
+        await self.runtime.writer.flush()
 
     def _submit(self, fact):
         if self.closed or self.finalized:
             raise RuntimeError("metrics Trial is closed")
         self.runtime.writer.submit(fact)
+        # Typed Attempt facts only: no string classification, status whitelist,
+        # retry, or second count from the final Turn (AttemptFact is a subclass).
+        if isinstance(fact, AttemptFact):
+            self.attempts_observed += 1
+            self.http500_attempts += type(fact.http_status) is int and fact.http_status == 500
+            self.http_status_unknown_attempts += type(fact.http_status) is not int
+        if self._fact_observer is not None:
+            self._fact_observer(fact)
 
     async def wait_for_headroom(self):
         if self.closed or self.finalized:
@@ -210,7 +229,10 @@ class MetricsCollector:
             **values, **{target: getattr(request, name) for name, target in _REQUEST_FIELDS.items()},
             trial_id=self.trial_id,
             usage=freeze_snapshot(result.usage if result is not None else turn.usage),
-            metadata=freeze_snapshot(turn.metadata), response_samples=trace.samples if trace else (),
+            metadata=freeze_snapshot({**turn.metadata, **({
+                '_perf_transport_sent_ns': result.transport_sent_ns,
+                '_perf_transport_timing_contract': result.transport_timing_contract,
+            } if result is not None else {})}), response_samples=trace.samples if trace else (),
             turn_started_ns=turn.measurements.lifecycle.started_ns,
             turn_completed_ns=(request.response_completed_ns if result is not None
                                else turn.measurements.lifecycle.completed_ns),
@@ -250,10 +272,18 @@ class MetricsCollector:
         if fact.trial_id != trial.id or fact.status != trial.status:
             raise ValueError("TrialFact belongs to another Trial state")
         self.finalized = True
+        trial.measurements.diagnostics.update(
+            http500_attempts=self.http500_attempts,
+            attempts_observed=self.attempts_observed,
+            http_status_unknown_attempts=self.http_status_unknown_attempts,
+            http_status_counts_basis="accepted_typed_attempt_facts",
+            http_status_counts_complete=False,
+        )
         report = await self.runtime.writer.call(self.runtime.backend.finalize_trial, fact)
         trial.measurements.metric_windows = report.windows
         trial.measurements.metric_counts = report.counts
         trial.measurements.diagnostics.update(report.diagnostics)
+        trial.measurements.diagnostics["http_status_counts_complete"] = True
         logger.info(
             "stage=metrics event=metrics.calculated trial_id=%s status=%s points=%s",
             trial.id,
