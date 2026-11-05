@@ -310,7 +310,7 @@ impl NativeTrial {
 fn latch_safety(state: &Mutex<State>, outcome: &Result<Outcome, oneshot::error::RecvError>) {
     if outcome
         .as_ref()
-        .is_ok_and(|o| o.error_origin == Some("safety"))
+        .is_ok_and(|o| o.error_origin == Some("safety") && o.http_status != Some(500))
     {
         let mut state = state.lock().unwrap();
         state.closed = true;
@@ -342,6 +342,15 @@ mod safety_latch_tests {
             }),
         );
         assert!(!a.is_cancelled());
+        latch_safety(
+            &state,
+            &Ok(Outcome {
+                error_origin: Some("safety"),
+                http_status: Some(500),
+                ..Default::default()
+            }),
+        );
+        assert!(!a.is_cancelled() && !state.lock().unwrap().closed);
         latch_safety(
             &state,
             &Ok(Outcome {

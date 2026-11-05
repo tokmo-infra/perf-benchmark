@@ -36,11 +36,13 @@ async def test_native_watchdog_stops_other_requests_before_python_notification(m
     async def stalled(request):
         nonlocal count
         await request.read()
+        response = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
         count += 1
         if count == 2:
             active.set()
         await release.wait()
-        return web.json_response({"choices": []})
+        return response
 
     app = web.Application()
     app.router.add_post("/", stalled)
@@ -64,12 +66,54 @@ async def test_native_watchdog_stops_other_requests_before_python_notification(m
             await trial.close()
 
 
+@pytest.mark.parametrize("delay_headers", [False, True])
+async def test_slow_http500_with_guard_never_stops_native_trial(monkeypatch, delay_headers):
+    from perf_benchmark import _native
+    from tests.runtime.native_support import command
+
+    monkeypatch.setenv("PERF_TTFT_LIMIT_MS", "100")
+    release = asyncio.Event()
+
+    async def fail(request):
+        await request.read()
+        if delay_headers:
+            await asyncio.sleep(0.2)
+        response = web.StreamResponse(status=500)
+        await response.prepare(request)
+        await release.wait()  # a slow or stalled error body must not affect status handling
+        return response
+
+    app = web.Application()
+    app.router.add_post("/", fail)
+    async with TestServer(app) as server:
+        trial = _native.create_trial("openai-chat")
+        spec = command(url=str(server.make_url("/")), stream=True, timeout=2.0)
+        first = trial.submit(_native.PreparedBody((), 0), spec)
+        second = None
+        try:
+            result = await asyncio.wait_for(first.result(), 3)
+            assert result.status == "failed"
+            assert result.http_status == 500 and result.error_origin == "service"
+            # Submission after the observed 500 proves the native trial was not latched.
+            second = trial.submit(_native.PreparedBody((), 0), spec)
+            other = await asyncio.wait_for(second.result(), 3)
+            assert other.http_status == 500 and other.error_origin == "service"
+        finally:
+            release.set()
+            await first.settled()
+            if second is not None:
+                await second.settled()
+            await trial.close()
+
+
 @pytest.mark.parametrize("code", [200, 500])
 @pytest.mark.parametrize("phase", ["release", "headroom", "observation"])
 @pytest.mark.parametrize("cancels", [1, 3])
 async def test_completed_http_attempt_survives_cleanup_cancellation(
-    trial_context, stage_context, tmp_path, code, phase, cancels,
+    trial_context, stage_context, tmp_path, monkeypatch, code, phase, cancels,
 ):
+    if code == 500:
+        monkeypatch.setenv("PERF_TTFT_LIMIT_MS", "100")
     ctx = trial_context("scheduler")
     run, trial = ctx.domain_run, ctx.trial
     run.prepare()
@@ -87,6 +131,7 @@ async def test_completed_http_attempt_survives_cleanup_cancellation(
     async def response(request):
         requests.append(await request.json())
         if code == 500:
+            await asyncio.sleep(0.2)  # Unknown status past the guard deadline.
             return web.json_response({"error": {"message": "real loopback failure"}}, status=500)
         return web.json_response({
             "choices": [{"message": {"role": "assistant", "content": "ok"},
@@ -157,6 +202,7 @@ async def test_completed_http_attempt_survives_cleanup_cancellation(
             assert len(returned) == 1
             original = returned[0]
             assert original.request.http_status == code
+            assert not ctx.cancellation.is_cancelled()
             # Exercise the same token->watcher boundary as automatic stop, then
             # repeat task cancellation to ensure owned cleanup survives it too.
             ctx.cancellation.cancel("cpu-regression-stop")

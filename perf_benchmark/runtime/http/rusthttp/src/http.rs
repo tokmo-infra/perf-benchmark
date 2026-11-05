@@ -286,6 +286,12 @@ impl Http {
                 out.completed_ns = Some(now());
                 return;
             }
+            // A pending response may ultimately be HTTP 500. Never stop the
+            // trial for an unknown status; arm only after successful headers,
+            // while retaining the original dispatch timestamp.
+            if (200..300).contains(&status) {
+                safety.arm();
+            }
             let mut framer = Framer::default();
             let mut json = Vec::new();
             let mut last = None;

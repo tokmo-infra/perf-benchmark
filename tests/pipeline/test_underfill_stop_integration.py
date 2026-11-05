@@ -43,7 +43,7 @@ class FakeWriter:
             raise self.error
 
 
-@pytest.mark.parametrize("outcome", ["ttft_safety", "http500"])
+@pytest.mark.parametrize("outcome", ["ttft_safety", "http500", "safety_with_http500"])
 async def test_native_result_observer_keeps_domain_ids_and_http500_does_not_stop(
     trial_context, tmp_path, monkeypatch, outcome,
 ):
@@ -58,9 +58,10 @@ async def test_native_result_observer_keeps_domain_ids_and_http500_does_not_stop
 
     ctx, runtime, attempt = await setup_request(trial_context)
     safety = outcome == "ttft_safety"
+    reported_safety = safety or outcome == "safety_with_http500"
     value = NativeResult(
-        status="failed", error="TTFTWatchdogExceeded" if safety else "HTTP500",
-        error_origin="safety" if safety else "http", retryable=False,
+        status="failed", error="TTFTWatchdogExceeded" if reported_safety else "HTTP500",
+        error_origin="safety" if reported_safety else "http", retryable=False,
         started_ns=100, completed_ns=60_000_000_201, http_status=None if safety else 500,
         samples=(), usage={}, output_chars=0, finish_reason=None, continuation=None,
         continuation_valid=False, output_kind="none", trigger_ns=None,

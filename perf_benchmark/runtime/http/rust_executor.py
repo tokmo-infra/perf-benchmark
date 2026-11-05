@@ -88,7 +88,8 @@ class RustHttpExecutorRuntime(RequestRuntime):
                         await finish_task(started)
                     except asyncio.CancelledError:
                         started.result()
-            if value.error_origin == 'safety' and value.error == 'TTFTWatchdogExceeded':
+            if (value.error_origin == 'safety' and value.error == 'TTFTWatchdogExceeded'
+                    and value.http_status != 500):
                 observer = getattr(self, 'safety_observer', None)
                 if observer is None:
                     self.cancellation.cancel('ttft_watchdog_safety_abort')
