@@ -24,7 +24,8 @@ from tests.executor.test_openai_chat import _runtime, _turn
 from tests.pipeline.test_execution import _admission, _strategy
 
 
-async def test_native_watchdog_stops_other_requests_before_python_notification(monkeypatch):
+@pytest.mark.parametrize("send_headers", [False, True])
+async def test_native_watchdog_stops_other_requests_before_python_notification(monkeypatch, send_headers):
     from perf_benchmark import _native
     from tests.runtime.native_support import command
 
@@ -37,7 +38,8 @@ async def test_native_watchdog_stops_other_requests_before_python_notification(m
         nonlocal count
         await request.read()
         response = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream"})
-        await response.prepare(request)
+        if send_headers:
+            await response.prepare(request)
         count += 1
         if count == 2:
             active.set()
@@ -66,8 +68,7 @@ async def test_native_watchdog_stops_other_requests_before_python_notification(m
             await trial.close()
 
 
-@pytest.mark.parametrize("delay_headers", [False, True])
-async def test_slow_http500_with_guard_never_stops_native_trial(monkeypatch, delay_headers):
+async def test_observed_http500_slow_body_does_not_stop_native_trial(monkeypatch):
     from perf_benchmark import _native
     from tests.runtime.native_support import command
 
@@ -76,8 +77,6 @@ async def test_slow_http500_with_guard_never_stops_native_trial(monkeypatch, del
 
     async def fail(request):
         await request.read()
-        if delay_headers:
-            await asyncio.sleep(0.2)
         response = web.StreamResponse(status=500)
         await response.prepare(request)
         await release.wait()  # a slow or stalled error body must not affect status handling
@@ -106,6 +105,39 @@ async def test_slow_http500_with_guard_never_stops_native_trial(monkeypatch, del
             await trial.close()
 
 
+async def test_slow_unknown_headers_trigger_guard_even_if_server_would_send_500(monkeypatch):
+    from perf_benchmark import _native
+    from tests.runtime.native_support import command
+
+    monkeypatch.setenv("PERF_TTFT_LIMIT_MS", "100")
+    received = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_500(request):
+        await request.read()
+        received.set()
+        await release.wait()
+        return web.Response(status=500)
+
+    app = web.Application()
+    app.router.add_post("/", delayed_500)
+    async with TestServer(app) as server:
+        trial = _native.create_trial("openai-chat")
+        spec = command(url=str(server.make_url("/")), stream=True, timeout=2.0)
+        handle = trial.submit(_native.PreparedBody((), 0), spec)
+        try:
+            await asyncio.wait_for(received.wait(), 2)
+            value = await asyncio.wait_for(handle.result(), 2)
+            assert value.status == "failed" and value.error_origin == "safety"
+            assert value.error == "TTFTWatchdogExceeded" and value.http_status is None
+            with pytest.raises(RuntimeError):
+                trial.submit(_native.PreparedBody((), 0), spec)
+        finally:
+            release.set()
+            await handle.settled()
+            await trial.close()
+
+
 @pytest.mark.parametrize("code", [200, 500])
 @pytest.mark.parametrize("phase", ["release", "headroom", "observation"])
 @pytest.mark.parametrize("cancels", [1, 3])
@@ -131,7 +163,6 @@ async def test_completed_http_attempt_survives_cleanup_cancellation(
     async def response(request):
         requests.append(await request.json())
         if code == 500:
-            await asyncio.sleep(0.2)  # Unknown status past the guard deadline.
             return web.json_response({"error": {"message": "real loopback failure"}}, status=500)
         return web.json_response({
             "choices": [{"message": {"role": "assistant", "content": "ok"},

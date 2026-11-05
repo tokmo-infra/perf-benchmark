@@ -286,12 +286,6 @@ impl Http {
                 out.completed_ns = Some(now());
                 return;
             }
-            // A pending response may ultimately be HTTP 500. Never stop the
-            // trial for an unknown status; arm only after successful headers,
-            // while retaining the original dispatch timestamp.
-            if (200..300).contains(&status) {
-                safety.arm();
-            }
             let mut framer = Framer::default();
             let mut json = Vec::new();
             let mut last = None;
@@ -391,9 +385,11 @@ impl Http {
             _ = sleep_until(deadline), if cmd.timeout > 0.0 => End::Timeout,
             _ = work => End::Done,
         };
-        if matches!(end, End::Safety)
-            || safety_limit.is_some_and(|limit| safety.exceeded(now(), limit))
-        {
+        if watchdog_fired(
+            out.http_status,
+            matches!(end, End::Safety),
+            safety_limit.is_some_and(|limit| safety.exceeded(now(), limit)),
+        ) {
             fail(&mut out, "safety", "TTFTWatchdogExceeded", false);
             out.completed_ns = Some(now());
         } else if matches!(end, End::Cancel) || cancel.is_cancelled() {
@@ -488,6 +484,10 @@ impl Http {
     }
 }
 
+fn watchdog_fired(status: Option<u16>, fired: bool, exceeded: bool) -> bool {
+    status != Some(500) && (fired || exceeded)
+}
+
 fn transport_failure(out: &mut Outcome, phase: &str, error: &std::io::Error) {
     let mut message = format!("TransportError: {phase}: {error}");
     let mut previous = error.to_string();
@@ -525,4 +525,17 @@ fn cancelled(
     out.decision_ns = Some(now());
     out.applied_ns = Some(now());
     out.completed_ns = out.applied_ns;
+}
+
+#[cfg(test)]
+mod watchdog_status_tests {
+    use super::watchdog_fired;
+
+    #[test]
+    fn observed_500_wins_over_both_watchdog_paths() {
+        assert!(!watchdog_fired(Some(500), true, true));
+        assert!(!watchdog_fired(Some(500), false, true));
+        assert!(watchdog_fired(None, true, true));
+        assert!(watchdog_fired(Some(200), false, true));
+    }
 }
