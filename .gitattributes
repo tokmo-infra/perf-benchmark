@@ -89,6 +89,7 @@ tests/pipeline/test_underfill_http_regression.py -export-ignore
 tests/pipeline/test_underfill_native_reconciliation.py -export-ignore
 tests/pipeline/test_underfill_stop.py -export-ignore
 tests/pipeline/test_underfill_stop_integration.py -export-ignore
+tests/pipeline/test_safety_admission.py -export-ignore
 tests/pipeline/test_parallel_preparation.py -export-ignore
 tests/pipeline/test_streaming.py -export-ignore
 tests/result_records.py -export-ignore

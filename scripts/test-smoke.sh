@@ -16,6 +16,7 @@ exec "$PYTHON" -m pytest -q \
   'tests/normalization/test_open_swe_traces_e2e.py::test_complete_recorded_swe_replay_uses_natural_outputs[anthropic-tools]' \
   tests/app/test_reasoning_validation.py::test_template_validation_negotiates_supported_effort \
   tests/runtime/test_native_executor.py::test_started_callback_failure_settles_native_before_release \
+  tests/pipeline/test_safety_admission.py \
   tests/executor/test_rust_openai_chat.py::test_pending_attempt_settles_before_releasing_body \
   tests/executor/test_openai_chat.py::test_explicit_null_uses_server_default_without_output_cap \
   tests/executor/test_rust_openai_chat.py::test_null_output_cap_survives_native_http \

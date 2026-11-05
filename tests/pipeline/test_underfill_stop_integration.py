@@ -98,8 +98,8 @@ async def test_native_result_observer_keeps_domain_ids_and_http500_does_not_stop
             assert packet["run_id"] == ctx.domain_run.id
             assert packet["trial_id"] == ctx.trial.id
             assert packet["request"]["turn_id"] == "turn"
-            assert packet["request"]["request_id"] is None
-            assert "X-Request-ID" not in submissions[0]["headers"]
+            assert packet["request"]["request_id"] == "turn:a1"
+            assert submissions[0]["headers"]["X-Request-ID"] == "turn:a1"
             assert packet["request"]["sent_ns"] == value.transport_sent_ns
             assert packet["request"]["first_token_pending"] is True
             assert ctx.cancellation.reason == "ttft_watchdog_safety_abort"
