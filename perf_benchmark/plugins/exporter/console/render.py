@@ -494,7 +494,12 @@ def _render_evidence(console, run_id, results, trials):
     table.add_column("状态")
     table.add_column("值")
     for key, row in evidence.get("conditions", {}).items():
-        table.add_row(Text(key), Text(row["status"]), Text(str(row["value"])))
+        # Low-level callers may supply bare metadata without a verification status.
+        status, value = "unverified", row
+        if (isinstance(row, Mapping) and isinstance(row.get("status"), str)
+                and "value" in row):
+            status, value = row["status"], row["value"]
+        table.add_row(Text(key), Text(status), Text(str(value)))
     quality = evidence.get("quality", {"status": "unverified"})
     table.add_row("质量关联", Text(quality["status"]), Text(str(quality)))
     console.print(table)

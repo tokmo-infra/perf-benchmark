@@ -245,3 +245,73 @@ async def test_console_reads_and_renders_plugin_metrics_off_event_loop(stage_con
     assert "Custom score" in output.getvalue()
     assert "custom_window" in output.getvalue()
     assert "123" in output.getvalue()
+
+
+async def _export_persisted_evidence(tmp_path, stage_context, evidence):
+    from perf_benchmark.pipeline.results.saver import SaverRuntime
+    from perf_benchmark.plugins.saver.sqlite import SQLiteSaver
+
+    run = Run(id="run-evidence", name="cancelled evidence")
+    run.prepare()
+    run.start()
+    sink = await SaverRuntime.create(
+        SQLiteSaver({"path": str(tmp_path / "evidence.db")}),
+        run, stage_context("saver", run=run),
+    )
+    try:
+        await sink.write_run_measurement("evidence", evidence)
+        run.finish("safety_stop")
+        reader = await sink.finalize(run)
+        before = reader.summary(run.id)
+        output = StringIO()
+        result = await ConsoleExporter(
+            {}, console=Console(file=output, width=240, color_system=None),
+        ).export(run.id, reader, stage_context("exporter", run=run))
+        assert result.outputs[0].location == "stdout"
+        assert reader.measurements(run.id, scope="run", scope_id=run.id)["evidence"] == evidence
+        assert reader.summary(run.id) == before
+        assert before["status"] == "cancelled"
+        assert before["error"] == "safety_stop"
+        return output.getvalue()
+    finally:
+        await sink.close()
+
+
+async def test_console_renders_bare_persisted_conditions_without_claiming_verification(
+    tmp_path, stage_context,
+):
+    # Coordinator accepts JSON metadata, not only the application's status/value rows.
+    conditions = {
+        "config_sha256": "a" * 64,
+        "dataset_sha256": "b" * 64,
+        "policy": {"start_percent": 40},
+        "task": "[bold red]cpu fixture[/bold red]",
+        "enabled": True,
+        "retries": 0,
+        "cache": None,
+        "pools": ["p", "d"],
+        "missing_status": {"value": True},
+        "missing_value": {"status": "observed"},
+        "invalid_status": {"status": 0, "value": True},
+    }
+    text = await _export_persisted_evidence(
+        tmp_path, stage_context, {"conditions": conditions},
+    )
+    for key, value in conditions.items():
+        line = next(line for line in text.splitlines() if key in line)
+        assert "unverified" in line
+        assert str(value) in line
+    assert "原始数据内容一致性未验证" in text
+
+
+@pytest.mark.parametrize("status,value", [("observed", True), ("declared", False), ("unknown", None)])
+async def test_console_preserves_structured_persisted_condition_status(
+    tmp_path, stage_context, status, value,
+):
+    text = await _export_persisted_evidence(
+        tmp_path, stage_context,
+        {"conditions": {"stream": {"status": status, "value": value}}},
+    )
+    line = next(line for line in text.splitlines() if "stream" in line)
+    assert status in line
+    assert str(value) in line
