@@ -52,20 +52,39 @@ class RustHttpExecutorRuntime(RequestRuntime):
         try:
             if self.native is None or self._close_task is not None:
                 raise RuntimeError("Rust runtime is not open")
+            from perf_benchmark import _native
             spec = prepared.spec
+            headers = {"Content-Type": prepared.body.content_type, **spec.headers}
+            request_id = next((value for name, value in headers.items()
+                               if name.lower() == "x-request-id"), None)
+            if request_id is None:
+                request_id = f"{prepared.input.turn.id}:a{prepared.input.attempt}"
+                headers["X-Request-ID"] = request_id
             timeout = self.settings.get("timeout_seconds", 300)
-            handle = self.native.submit(prepared.native_body, {
-                "url": spec.url, "method": spec.method,
-                "notify_start": signal.started_callback is not None,
-                "expectations": spec.response_expectations,
-                "headers": {"Content-Type": prepared.body.content_type, **spec.headers},
-                "body_length": prepared.body.content_length, "stream": spec.streaming,
-                "retain": spec.retain_output, "timeout": 0.0 if timeout is None else timeout,
-                "plan": asdict(signal.plan),
-                "session_id": prepared.input.session.id,
-                "connection_scope": self.settings.get("connection_scope", "session"),
-                "verify_ssl": self.settings.get("verify_ssl", False),
-            }, cancelled=signal.reason is not None or task.cancelling() > 0)
+            try:
+                handle = self.native.submit(prepared.native_body, {
+                    "url": spec.url, "method": spec.method,
+                    "notify_start": signal.started_callback is not None,
+                    "expectations": spec.response_expectations,
+                    "headers": headers,
+                    "body_length": prepared.body.content_length, "stream": spec.streaming,
+                    "retain": spec.retain_output, "timeout": 0.0 if timeout is None else timeout,
+                    "plan": asdict(signal.plan),
+                    "session_id": prepared.input.session.id,
+                    "connection_scope": self.settings.get("connection_scope", "session"),
+                    "verify_ssl": self.settings.get("verify_ssl", False),
+                }, cancelled=signal.reason is not None or task.cancelling() > 0)
+            except _native.SafetyAdmissionRejected:
+                # The native safety latch is authoritative even before Python
+                # receives the overdue request. This Attempt was never submitted;
+                # no transport timestamps or TTFT proof exist for it.
+                self.cancellation.cancel("ttft_watchdog_safety_abort")
+                return AttemptResult(
+                    prepared.input.turn.id, prepared.input.attempt, status="cancelled",
+                    error="native_safety_admission_rejected", error_origin="client",
+                    request_facts=prepared.request_facts, continuation_valid=False,
+                    transport_timing_contract="not-dispatched-v1",
+                )
             prepared.native_attempt = handle
             operation = asyncio.ensure_future(handle.result())
             started = (
@@ -95,7 +114,7 @@ class RustHttpExecutorRuntime(RequestRuntime):
                     self.cancellation.cancel('ttft_watchdog_safety_abort')
                 else:
                     first = value.samples[0][1] if value.samples else None
-                    observer(dict(request_id=spec.headers.get('X-Request-ID'),
+                    observer(dict(request_id=request_id,
                         turn_id=prepared.input.turn.id, attempt=prepared.input.attempt,
                         sent_ns=value.transport_sent_ns, first_token_ns=first,
                         first_token_pending=first is None, detected_ns=value.completed_ns,

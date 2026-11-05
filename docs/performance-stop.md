@@ -20,6 +20,12 @@ HOLD，不自动停测。预派发请求的完成下界可在事件循环内安�
 须为已存在的绝对目录；其中的一次性 `native-stop.json` 和 `safety-stop.json` 为通知而非
 权威结果，目录应由调用方为每个 Trial 独立管理，I/O 错误会报告失败。
 
+原生 safety 锁止 admission 后，用专属 `SafetyAdmissionRejected` 区分后续未派发请求与
+显式 close、执行故障和参数错误。Python 仅把此类拒绝交接为 cancelled Attempt 并传播全局
+取消，不制造发送时间或新 TTFT 证明；原先已发送的超时失败仍须交接并生成真实 safety 通知。
+实际 HTTP 未提供 `X-Request-ID` 时使用 `turn.id:a{attempt}`，大小写任意的用户自定义值均
+原样保留；通知引用实际发送的同一 ID。
+
 完成队列诊断按 native 窗口报告首遍成功请求的 TTFT、TPOT、decode 样本覆盖和缺失原因，
 并按 typed Attempt 计数 HTTP 500 和未知状态，不改变窗口公式或推测缺失 token、样本与成功。
 取消期间已返回的真实 Attempt 仍可靠交接，Turn 可以保持 cancelled。

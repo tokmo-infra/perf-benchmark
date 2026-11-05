@@ -59,7 +59,7 @@ async def test_native_watchdog_stops_other_requests_before_python_notification(m
             assert any(value.error_origin == "safety" for value in outcomes)
             assert all(value.status != "succeeded" for value in outcomes)
             assert all(value.transport_sent_ns is not None for value in outcomes)
-            with pytest.raises(RuntimeError):
+            with pytest.raises(_native.SafetyAdmissionRejected):
                 trial.submit(_native.PreparedBody((), 0), spec)
         finally:
             release.set()
@@ -130,7 +130,7 @@ async def test_slow_unknown_headers_trigger_guard_even_if_server_would_send_500(
             value = await asyncio.wait_for(handle.result(), 2)
             assert value.status == "failed" and value.error_origin == "safety"
             assert value.error == "TTFTWatchdogExceeded" and value.http_status is None
-            with pytest.raises(RuntimeError):
+            with pytest.raises(_native.SafetyAdmissionRejected):
                 trial.submit(_native.PreparedBody((), 0), spec)
         finally:
             release.set()

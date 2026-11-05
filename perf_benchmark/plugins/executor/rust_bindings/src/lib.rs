@@ -1,4 +1,6 @@
-use perf_rusthttp::binding::{Attempt, NativeTrial, OutputSamples, PreparedBody};
+use perf_rusthttp::binding::{
+    Attempt, NativeTrial, OutputSamples, PreparedBody, SafetyAdmissionRejected,
+};
 use perf_trace_inflate::TraceHashInflator;
 use pyo3::prelude::*;
 #[pyfunction]
@@ -26,6 +28,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("TTFT_WATCHDOG_CONTRACT", "sent-dispatch-first-output-v1")?;
     m.add_function(wrap_pyfunction!(create_trial, m)?)?;
     m.add_function(wrap_pyfunction!(now, m)?)?;
+    m.add(
+        "SafetyAdmissionRejected",
+        m.py().get_type::<SafetyAdmissionRejected>(),
+    )?;
     m.add_class::<NativeTrial>()?;
     m.add_class::<PreparedBody>()?;
     m.add_class::<Attempt>()?;

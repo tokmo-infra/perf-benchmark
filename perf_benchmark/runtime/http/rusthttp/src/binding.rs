@@ -39,8 +39,21 @@ impl PreparedBody {
         self.body.take();
     }
 }
+pyo3::create_exception!(
+    _native,
+    SafetyAdmissionRejected,
+    pyo3::exceptions::PyException
+);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    Open,
+    SafetyStopped,
+    Closed,
+}
+
 struct State {
-    closed: bool,
+    admission: Admission,
     error: Option<String>,
     sequence: u64,
     tasks: HashMap<u64, (String, CancellationToken)>,
@@ -61,7 +74,7 @@ impl NativeTrial {
             inner: Arc::new(Trial {
                 http: Http::default(),
                 state: Mutex::new(State {
-                    closed: false,
+                    admission: Admission::Open,
                     error: None,
                     sequence: 0,
                     tasks: HashMap::new(),
@@ -77,7 +90,7 @@ impl Drop for NativeTrial {
         let inner = self.inner.clone();
         {
             let mut state = inner.state.lock().unwrap();
-            state.closed = true;
+            state.admission = Admission::Closed;
             for (_, token) in state.tasks.values() {
                 token.cancel();
             }
@@ -111,8 +124,22 @@ impl NativeTrial {
         if let Some(error) = &state.error {
             return Err(PyRuntimeError::new_err(error.clone()));
         }
-        if state.closed {
+        if state.admission == Admission::Closed {
             return Err(PyRuntimeError::new_err("native trial is closed"));
+        }
+        // Validate without consuming the body even when safety has stopped
+        // admission. Parameter errors must not masquerade as cancellation.
+        let pending = body
+            .body
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("body already consumed"))?;
+        if command.body_length < 0 || pending.length != command.body_length as usize {
+            return Err(PyValueError::new_err("body length mismatch"));
+        }
+        if state.admission == Admission::SafetyStopped {
+            return Err(SafetyAdmissionRejected::new_err(
+                "native safety stopped admission",
+            ));
         }
         let network = HTTP_RUNTIME
             .get_or_init(|| {
@@ -123,13 +150,7 @@ impl NativeTrial {
             })
             .as_ref()
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-        let mut body = body
-            .body
-            .take()
-            .ok_or_else(|| PyValueError::new_err("body already consumed"))?;
-        if command.body_length < 0 || body.length != command.body_length as usize {
-            return Err(PyValueError::new_err("body length mismatch"));
-        }
+        let mut body = body.body.take().expect("validated body");
         state.sequence += 1;
         let id = state.sequence;
         let cancel = CancellationToken::new();
@@ -238,12 +259,12 @@ impl NativeTrial {
     }
     #[getter]
     fn closed(&self) -> bool {
-        self.inner.state.lock().unwrap().closed
+        self.inner.state.lock().unwrap().admission != Admission::Open
     }
     #[getter]
     fn finished(&self) -> bool {
         let state = self.inner.state.lock().unwrap();
-        state.closed && state.tasks.is_empty()
+        state.admission != Admission::Open && state.tasks.is_empty()
     }
     fn close_session<'py>(
         &self,
@@ -280,7 +301,7 @@ impl NativeTrial {
         let inner = self.inner.clone();
         {
             let mut state = inner.state.lock().unwrap();
-            state.closed = true;
+            state.admission = Admission::Closed;
             for (_, token) in state.tasks.values() {
                 token.cancel();
             }
@@ -313,7 +334,9 @@ fn latch_safety(state: &Mutex<State>, outcome: &Result<Outcome, oneshot::error::
         .is_ok_and(|o| o.error_origin == Some("safety") && o.http_status != Some(500))
     {
         let mut state = state.lock().unwrap();
-        state.closed = true;
+        if state.admission == Admission::Open {
+            state.admission = Admission::SafetyStopped;
+        }
         for (_, token) in state.tasks.values() {
             token.cancel();
         }
@@ -329,7 +352,7 @@ mod safety_latch_tests {
         let b = CancellationToken::new();
         let unrelated = CancellationToken::new();
         let state = Mutex::new(State {
-            closed: false,
+            admission: Admission::Open,
             error: None,
             sequence: 2,
             tasks: HashMap::from([(1, ("s1".into(), a.clone())), (2, ("s2".into(), b.clone()))]),
@@ -350,7 +373,7 @@ mod safety_latch_tests {
                 ..Default::default()
             }),
         );
-        assert!(!a.is_cancelled() && !state.lock().unwrap().closed);
+        assert!(!a.is_cancelled() && state.lock().unwrap().admission == Admission::Open);
         latch_safety(
             &state,
             &Ok(Outcome {
@@ -358,8 +381,21 @@ mod safety_latch_tests {
                 ..Default::default()
             }),
         );
-        assert!(a.is_cancelled() && b.is_cancelled() && state.lock().unwrap().closed);
+        assert!(
+            a.is_cancelled()
+                && b.is_cancelled()
+                && state.lock().unwrap().admission == Admission::SafetyStopped
+        );
         assert!(!unrelated.is_cancelled());
+        state.lock().unwrap().admission = Admission::Closed;
+        latch_safety(
+            &state,
+            &Ok(Outcome {
+                error_origin: Some("safety"),
+                ..Default::default()
+            }),
+        );
+        assert!(state.lock().unwrap().admission == Admission::Closed);
     }
 }
 #[derive(Default)]
