@@ -1,4 +1,4 @@
-"""Immutable, validated Parquet sealing and local seven-day retention.
+"""Immutable, validated Parquet sealing and configurable detail retention.
 
 Concrete SQLite Saver storage policy. No metric calculation or optional SDKs.
 """
@@ -45,13 +45,13 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
-def expires_at(finished):
-    if finished is None:
+def expires_at(finished, days=7):
+    if finished is None or days is None:
         return None
     parsed = datetime.fromisoformat(finished.replace('Z', '+00:00'))
     if parsed.tzinfo is None:
         raise ValueError('Run finish time requires a UTC offset')
-    return (parsed.astimezone(timezone.utc) + timedelta(days=7)).isoformat()
+    return (parsed.astimezone(timezone.utc) + timedelta(days=days)).isoformat()
 
 
 def _coordination(source):
@@ -150,7 +150,7 @@ def read_info(directory, *, verify=False, verify_details=False):
         raise ValueError('incompatible result archive')
     if Path(info['source_name']).name != info['source_name']:
         raise ValueError('invalid archive source name')
-    if info['detail_expires_at'] != expires_at(info['finished_at']):
+    if info['detail_expires_at'] != expires_at(info['finished_at'], info.get('detail_retention_days', 7)):
         raise ValueError('archive expiry differs from Run finish time')
     files = orjson.loads(info['files_json'])
     expected = {f'summary/{name}.parquet' for name in SUMMARY_TABLES}
@@ -194,6 +194,9 @@ def _seal(source):
             raise ValueError('archive_incomplete_finalization')
         database_id = db.execute('SELECT database_id FROM result_identity').fetchone()[0]
         revision = db.execute('SELECT revision FROM result_state').fetchone()[0]
+        retention = db.execute("SELECT value_json FROM measurements WHERE scope='run' "
+                               "AND name='result_retention'").fetchone()
+        policy = orjson.loads(retention[0]) if retention else {}
         if directory.exists():
             info = read_info(directory, verify=True)
             expiry = info['detail_expires_at']
@@ -210,9 +213,7 @@ def _seal(source):
                 files.extend(_encode(db, table, tier, temporary / tier / (table + '.parquet')) for table in tables)
             counts = {table: db.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
                       for table in ('trials', 'sessions', 'turns', 'metric_points')}
-            retention = db.execute("SELECT value_json FROM measurements WHERE scope='run' "
-                                   "AND name='result_retention'").fetchone()
-            if retention and orjson.loads(retention[0]).get('summary_only'):
+            if policy.get('summary_only'):
                 counts['sessions'], counts['turns'] = db.execute(
                     'SELECT coalesce(sum(session_count),0),coalesce(sum(turn_count),0) FROM trials').fetchone()
             totals = pa.Table.from_pylist([{'run_id': run_id, **counts}], schema=pa.schema([
@@ -226,11 +227,15 @@ def _seal(source):
             info = {'archive_version': ARCHIVE_VERSION, 'sqlite_schema': ARTIFACT_SCHEMA_VERSION,
                     'measurement_contract': MEASUREMENT_CONTRACT, 'run_id': run_id,
                     'database_id': database_id, 'revision': revision, 'source_name': source.name,
-                    'finished_at': finished, 'detail_expires_at': expires_at(finished),
+                    'finished_at': finished,
+                    'detail_retention_days': policy.get('detail_retention_days', 7),
+                    'detail_expires_at': expires_at(finished, policy.get('detail_retention_days', 7)),
+                    'delete_db_after_archive': policy.get('delete_db_after_archive', False),
                     'sealed_at': utc_now().isoformat(), 'observation_enabled': orjson.loads(observation[0])['enabled'] if observation else None,
                     'files_json': orjson.dumps(files).decode()}
             # Explicit nullable strings avoid an all-null Arrow type for unknown expiry.
-            schema = pa.schema([(key, pa.int64() if type(value) is int else pa.bool_() if key == 'observation_enabled'
+            schema = pa.schema([(key, pa.int64() if type(value) is int or key == 'detail_retention_days'
+                                 else pa.bool_() if key in {'observation_enabled', 'delete_db_after_archive'}
                                  else pa.string()) for key, value in info.items()])
             pq.write_table(pa.Table.from_pylist([info], schema=schema), temporary / 'summary' / 'artifact_info.parquet')
             _sync(temporary / 'summary' / 'artifact_info.parquet')
@@ -268,7 +273,10 @@ def detail_lease(source, *, now=None):
         elif source.exists():
             with closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True)) as db:
                 row = db.execute('SELECT finished_at FROM runs').fetchone()
-                expiry = expires_at(row[0]) if row else None
+                retention = db.execute("SELECT value_json FROM measurements WHERE scope='run' "
+                                       "AND name='result_retention'").fetchone()
+                policy = orjson.loads(retention[0]) if retention else {}
+                expiry = expires_at(row[0], policy.get('detail_retention_days', 7)) if row else None
         else:
             raise ValueError('detail_unavailable')
         if expiry is not None and (now or utc_now()) >= datetime.fromisoformat(expiry):
@@ -284,6 +292,44 @@ def detail_lease(source, *, now=None):
             Path(lease.lock_file).unlink(missing_ok=True)
 
 
+def _reader_active(source):
+    for path in sorted((_coordination(source) / 'leases').glob('*.lock')):
+        try:
+            with FileLock(path, timeout=0):
+                pass
+        except Timeout:
+            return True
+        path.unlink(missing_ok=True)
+    return False
+
+
+def delete_sqlite(directory):
+    """Retire duplicate SQLite only after all compressed facts verify exactly."""
+    directory = Path(directory).resolve()
+    info = read_info(directory)
+    source = directory.parent / info['source_name']
+    if archive_path(source) != directory:
+        raise ValueError('archive source location mismatch')
+    with FileLock(_coordination(source) / 'seal.lock', timeout=-1), _lock(source):
+        info = read_info(directory, verify=True, verify_details=True)
+        if _reader_active(source):
+            return {'run_id': info['run_id'], 'state': 'reader_active'}
+        if source.exists():
+            with closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True)) as db:
+                identity = db.execute('SELECT database_id FROM result_identity').fetchone()[0]
+                revision = db.execute('SELECT revision FROM result_state').fetchone()[0]
+                if (identity, revision) != (info['database_id'], info['revision']):
+                    raise ValueError('detail_source_changed')
+        removed = 0
+        for suffix in ('', '-wal', '-shm'):
+            path = Path(str(source) + suffix)
+            if path.exists():
+                removed += path.stat().st_size
+                path.unlink()
+        _sync_directory(source.parent)
+        return {'run_id': info['run_id'], 'state': 'sqlite_removed', 'removed_bytes': removed}
+
+
 def cleanup(directory, *, now=None):
     """Delete both detail formats only after a valid permanent summary and leases."""
     directory = Path(directory).resolve()
@@ -295,17 +341,12 @@ def cleanup(directory, *, now=None):
         info = read_info(directory, verify=True)
         expiry = info['detail_expires_at']
         if expiry is None:
-            return {'run_id': info['run_id'], 'state': 'expiry_unknown'}
+            return {'run_id': info['run_id'], 'state':
+                    'retained' if info.get('detail_retention_days', 7) is None else 'expiry_unknown'}
         if (now or utc_now()) < datetime.fromisoformat(expiry):
             return {'run_id': info['run_id'], 'state': 'retained'}
-        leases = _coordination(source) / 'leases'
-        for path in sorted(leases.glob('*.lock')):
-            try:
-                with FileLock(path, timeout=0):
-                    pass
-            except Timeout:
-                return {'run_id': info['run_id'], 'state': 'reader_active'}
-            path.unlink(missing_ok=True)
+        if _reader_active(source):
+            return {'run_id': info['run_id'], 'state': 'reader_active'}
         from .parquet_reader import SummaryReader
         reader = SummaryReader(directory)
         if reader.run_ids() != (info['run_id'],):
@@ -388,7 +429,10 @@ def finish_writer(lease, source, *, finalized):
                 pending.unlink()
                 continue
             try:
-                _seal(path)
+                directory = _seal(path)
+                if read_info(directory).get('delete_db_after_archive', False):
+                    outcome = delete_sqlite(directory)
+                    logging.getLogger(__name__).info('Result storage: %s', outcome)
             except Exception as exc:
                 if path == source:
                     failure = exc

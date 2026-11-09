@@ -785,7 +785,7 @@ uv run perf-benchmark results compact --root /absolute/results --apply
 该命令验证终态数据库和保留的 Excel，移除可重导出的 `report.html`、`summary.csv`、`minutes.csv`、`requests.csv` 及旧版 `metrics.csv`；
 相同 `selected.jsonl` 按 SHA256 共享硬链接，原加载路径保持可用。SQLite/Parquet、配置、
 Excel 和历史明文日志保留。精简对象限于已结束、WAL 为空且通过完整性验证的结果。
-封存清单及同步回执随精简记录更新，明细仍遵守七天保留规则。
+封存清单及同步回执随精简记录更新，明细遵循运行时保存的保留期限。
 仅显式添加 `--compress-metrics` 才将已关闭的指标观测日志无损压缩为 gzip。
 
 | 文件 / Excel 工作表 | 内容 |
@@ -975,12 +975,55 @@ requests 中的 attempt 或 turn 一种 scope。运行中的事实写入 SQLite�
 统一 ResultReader 自动路由结果，派生 CSV/XLSX 可按需重导出。
 
 同级 `<数据库文件名>.archive/summary/` 长期保存汇总、趋势与比较；`details/` 和原 SQLite
-从 `Run.finished_at` 起保留七天。明细过期后，汇总仍可浏览；已导出的 Excel/CSV 是独立文件。
-备份或同步结果时同时保留 SQLite、封存目录和已导出的表格。活动读取与 writer 使用协调租约，
+默认从 `Run.finished_at` 起保留七天。明细过期后，汇总仍可浏览；已导出的 Excel/CSV 是独立文件。
+备份或同步结果时保留完整封存目录、已导出的表格和当前保留的 SQLite。活动读取与 writer 使用协调租约，
 跨容器必须共享缓存根下的 `perf-benchmark/result-sealing` 协调目录，详见下节。
 
 运行期间保持 SQLite/WAL 的位置与内容稳定。writer 关闭后再备份数据库与结果文件；schema 校验采用严格版本匹配。
 当前版本号以 `perf_benchmark/plugins/saver/sqlite/schema.py` 为准。
+
+### 压缩归档与校验
+
+压缩归档模式在测试和表格导出结束后保留 Excel 与 Zstd Parquet，将 SQLite 中的事实按列无损保存。
+表结构、行数、文件 SHA256、事实摘要和 Run 身份随归档保存。归档阶段逐表读回核对原始值，
+删除数据库前再次校验全部归档文件、源数据库身份和提交版本；活动明细读取结束后可再次执行清理命令。
+以下配置适合长期保存、后续复核的测试：
+
+```yaml
+pipeline:
+  saver:
+    plugin: sqlite
+    settings:
+      path: results/run-001.db
+      delete_db_after_archive: true
+      detail_retention_days: null
+```
+
+`delete_db_after_archive` 默认 false；true 表示归档完整校验通过后删除重复的 DB、WAL 和 SHM。
+`detail_retention_days` 默认 7，正整数指定明细保留天数，null 长期保留。保留内容包括请求与重试状态、
+usage 和缓存 token、客户端计时、逐请求指标、运行参数、统计窗口及公式版本。Excel 仍默认导出
+summary、minutes，汇总统计及费用口径保持一致。`summary_only: true` 是面向容量测试的聚合模式，
+逐请求校验使用完整事实压缩归档模式。
+
+已有测试可显式清除重复 SQLite，保留现有归档及其原有保留期限：
+
+```bash
+uv run perf-benchmark results archive results/run-001.db --delete-db
+uv run perf-benchmark results verify results/run-001.db.archive
+uv run perf-benchmark results analyze results/run-001.db.archive --details \
+  --sql 'SELECT status, count(*) AS requests FROM requests GROUP BY status'
+```
+
+`verify` 逐文件核对 SHA256、schema 和行数。`analyze --details` 直接查询压缩请求事实，
+Web 汇总直接读取归档。需要重新导出表格、原生请求分页或逐请求调试时，将归档恢复到一个新的数据库文件：
+
+```bash
+uv run perf-benchmark results restore results/run-001.db.archive --output results/review.db
+uv run perf-benchmark export results/review.db --output results/review-tables --tables requests
+```
+
+恢复按批解压并保留原始请求关系和测量值，输出路径采用排他创建。复核完成后可清除恢复的数据库，
+长期保存的压缩归档继续作为事实来源。`results cleanup --root results` 按各归档保存的期限处理过期明细。
 
 ## 11. Observation 与交互
 
@@ -1008,7 +1051,7 @@ Observation 开销须在同负载下对照验证；缺失样本保留 unknown。
 
 Docker 标准部署通过工作台同源 `/grafana/` 访问诊断页。工作台与 Grafana 的公开地址、
 Host/Origin 和 WebSocket 转发必须一致；修改端口时同步修改 `WORKBENCH_PUBLIC_URL`。
-完整汇总长期保留，请求明细七天后显示过期原因。跨容器运行时 writer、reader 和 cleanup
+完整汇总长期保留，请求明细按各归档的保留期限访问。跨容器运行时 writer、reader 和 cleanup
 共享缓存根下的 `perf-benchmark/result-sealing`；协调文件管理运行状态，结果备份在 writer 关闭后执行。
 
 ## 12. Docker 部署

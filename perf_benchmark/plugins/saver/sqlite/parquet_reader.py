@@ -1,4 +1,4 @@
-"""Permanent formal views and explicit seven-day SQLite drilldown routing."""
+"""Permanent formal views and retention-aware SQLite drilldown routing."""
 from contextlib import contextmanager
 from pathlib import Path
 
