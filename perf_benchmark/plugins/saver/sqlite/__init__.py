@@ -596,13 +596,19 @@ class SQLiteResultReader:
 
 
 class _SQLiteBackend:
-    def __init__(self, path: Path, run: RunRecord, *, summary_only=False) -> None:
+    def __init__(self, path: Path, run: RunRecord, *, summary_only=False,
+                 delete_db_after_archive=False, detail_retention_days=7) -> None:
         self.path, self.run = path, run
         self.connection: sqlite3.Connection | None = None
         self.finalized = False
         self.writer_lease = None
         from .summary_retention import SummaryRetention
         self.retention = SummaryRetention(path) if summary_only else None
+        self.storage_policy = {
+            'summary_only': summary_only, 'request_details_retained': not summary_only,
+            'delete_db_after_archive': delete_db_after_archive,
+            'detail_retention_days': detail_retention_days,
+        }
 
     @property
     def artifact(self) -> SaverArtifact:
@@ -648,9 +654,8 @@ class _SQLiteBackend:
                 f" ON CONFLICT({primary}) DO UPDATE SET {updates},revision=excluded.revision WHERE " + " OR ".join(
                     f"{table}.{c[1]} IS NOT excluded.{c[1]}" for c in columns if not c[5]),
             )
-        if self.retention is not None:
-            self.write_batch((MeasurementRecord(self.run.id, 'run', self.run.id, 'result_retention',
-                                               {'summary_only': True, 'request_details_retained': False}),))
+        self.write_batch((MeasurementRecord(self.run.id, 'run', self.run.id, 'result_retention',
+                                           self.storage_policy),))
 
     def write_batch(self, records: Sequence[ResultRecord]) -> ResultCommit | None:
         if self.retention is not None:
@@ -720,7 +725,8 @@ class _SQLiteBackend:
 
 
 def parse_settings(settings: dict) -> dict:
-    unknown = set(settings) - {"path", "summary_only"}
+    unknown = set(settings) - {"path", "summary_only", "delete_db_after_archive",
+                               "detail_retention_days"}
     if unknown:
         raise ValueError(f"unknown sqlite saver setting: {sorted(unknown)[0]}")
     value = settings.get("path")
@@ -729,7 +735,14 @@ def parse_settings(settings: dict) -> dict:
     summary_only = settings.get('summary_only', False)
     if type(summary_only) is not bool:
         raise ValueError('saver summary_only must be boolean')
-    return {"path": value, "summary_only": summary_only}
+    delete_db = settings.get('delete_db_after_archive', False)
+    if type(delete_db) is not bool:
+        raise ValueError('saver delete_db_after_archive must be boolean')
+    days = settings.get('detail_retention_days', 7)
+    if days is not None and (type(days) is not int or days < 1):
+        raise ValueError('saver detail_retention_days must be a positive integer or null')
+    return {"path": value, "summary_only": summary_only,
+            "delete_db_after_archive": delete_db, "detail_retention_days": days}
 
 
 @register_plugin(
@@ -752,12 +765,16 @@ class SQLiteSaver:
     def __init__(self, settings) -> None:
         self.path = str(settings["path"])
         self.summary_only = settings.get('summary_only', False)
+        self.delete_db_after_archive = settings.get('delete_db_after_archive', False)
+        self.detail_retention_days = settings.get('detail_retention_days', 7)
 
     def create_backend(self, run: RunRecord, ctx: SaverContext) -> SaverBackend:
         path = Path(self.path).expanduser()
         if not path.is_absolute():
             path = ctx.base_dir / path
-        return _SQLiteBackend(path, run, summary_only=self.summary_only)
+        return _SQLiteBackend(path, run, summary_only=self.summary_only,
+                              delete_db_after_archive=self.delete_db_after_archive,
+                              detail_retention_days=self.detail_retention_days)
 
 
 def _run_row(run: RunRecord) -> tuple:

@@ -27,10 +27,10 @@ def private_sealing_root(tmp_path, monkeypatch):
     monkeypatch.setattr(archive, '_sealing_root', lambda: root)
 
 
-def fixture(path, *, run_id='run', finished=FINISHED, status='succeeded', unit='s'):
+def fixture(path, *, run_id='run', finished=FINISHED, status='succeeded', unit='s', settings=None):
     run = Run(id=run_id, name='正式事实一致性')
     trial = Trial(id='trial', run_id=run_id)
-    backend = SQLiteSaver({'path': str(path)}).create_backend(_snapshot(RunRecord, run), SaverContext(path.parent, CancellationToken()))
+    backend = SQLiteSaver({'path': str(path), **(settings or {})}).create_backend(_snapshot(RunRecord, run), SaverContext(path.parent, CancellationToken()))
     backend.open()
     backend.write_batch((MeasurementRecord(run_id, "run", run_id, "observation_mode", {"enabled": False, "trace_mode": "benchmark"}),))
     backend.write_batch(tuple(_trial_records(trial, None)))
@@ -239,6 +239,7 @@ def test_unfinished_stage_blocks_manual_sealing(tmp_path):
 
 def test_edge_facts_retry_non_stream_non_text_and_null_survive_archive(tmp_path):
     from benchmarks.sqlite_parquet_comparison import create
+    from perf_benchmark.plugins.saver.sqlite.archive_tools import restore
     directory = tmp_path / 'edges'
     create(directory, 64, 'edges')
     path = directory / 'results.db'
@@ -252,6 +253,11 @@ def test_edge_facts_retry_non_stream_non_text_and_null_survive_archive(tmp_path)
         expected[row['status']] = expected.get(row['status'], 0) + 1
     assert requests['items'] == [{'status': status, 'n': count} for status, count in sorted(expected.items())]
     assert analyze([archive.archive_path(path)], 'SELECT count(*) AS n FROM attempts', details=True)['items'] == [{'n': 72}]
+    turns, attempts = tuple(sql.iter_turn_records('edges')), tuple(sql.iter_attempt_records('edges'))
+    archive.delete_sqlite(archive.archive_path(path))
+    restored = SQLiteResultReader(restore(archive.archive_path(path), path))
+    assert tuple(restored.iter_turn_records('edges')) == turns
+    assert tuple(restored.iter_attempt_records('edges')) == attempts
 
 
 
@@ -272,3 +278,137 @@ def test_one_writer_per_source_and_fresh_run_files(tmp_path):
             third.open()
     finally:
         third.close()
+
+
+async def test_compressed_storage_restores_exact_requests_and_preserves_excel(tmp_path):
+    from perf_benchmark.app.report import export_tables
+    from perf_benchmark.plugins.saver.sqlite.archive_tools import restore, verify
+    from openpyxl import load_workbook
+
+    path = tmp_path / 'run.sqlite'
+    directory = fixture(path)
+    original = SQLiteResultReader(path)
+    turns = tuple(original.iter_turn_records('run'))
+    attempts = tuple(original.iter_attempt_records('run'))
+    page = original.request_page('run', scope='attempt')
+    summary = tuple(original.iter_summary_records('run'))
+    await export_tables(path, tmp_path / 'before', ['xlsx'])
+    before = path.stat().st_size
+    assert archive.delete_sqlite(directory)['removed_bytes'] >= before
+    assert not path.exists()
+    assert archive.delete_sqlite(directory)['removed_bytes'] == 0
+    assert verify(path)['state'] == 'verified'
+    assert analyze([directory], 'SELECT count(*) AS n FROM requests', details=True)['items'] == [{'n': 16}]
+    assert tuple(SQLiteSaver.open_reader(str(path)).iter_summary_records('run')) == summary
+    restored = restore(directory, tmp_path / 'restored.sqlite')
+    await export_tables(restored, tmp_path / 'after', ['xlsx'])
+
+    def excel_values(folder):
+        workbook = load_workbook(folder / 'results.xlsx', read_only=True)
+        try:
+            return {sheet.title: tuple(sheet.values) for sheet in workbook}
+        finally:
+            workbook.close()
+
+    assert excel_values(tmp_path / 'before') == excel_values(tmp_path / 'after')
+    reader = SQLiteResultReader(restored)
+    assert tuple(reader.iter_turn_records('run')) == turns
+    assert tuple(reader.iter_attempt_records('run')) == attempts
+    assert reader.request_page('run', scope='attempt') == page
+    assert tuple(reader.iter_summary_records('run')) == summary
+    with pytest.raises(FileExistsError):
+        restore(directory, restored)
+    assert not list(tmp_path.glob('.restore-*'))
+
+
+@pytest.mark.parametrize('days', [None, 30])
+def test_automatic_db_deletion_and_configurable_detail_retention(tmp_path, days):
+    from perf_benchmark.plugins.saver.sqlite.archive_tools import restore, verify
+    path = tmp_path / 'run.sqlite'
+    old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    directory = fixture(path, finished=old, settings={
+        'delete_db_after_archive': True, 'detail_retention_days': days})
+    assert not path.exists()
+    assert verify(directory)['state'] == 'verified'
+    info = archive.read_info(directory)
+    assert info['detail_retention_days'] == days
+    assert info['detail_expires_at'] == archive.expires_at(old, days)
+    assert archive.cleanup(directory)['state'] == 'retained'
+    restored = restore(directory, path)
+    assert SQLiteSaver.open_reader(str(restored)).request_page('run')['total'] == 16
+    if days is None:
+        future = datetime.now(timezone.utc) + timedelta(days=3650)
+        assert archive.cleanup(directory, now=future)['state'] == 'retained'
+        with archive.detail_lease(path, now=future):
+            pass
+    else:
+        assert archive.cleanup(directory, now=datetime.fromisoformat(info['detail_expires_at']))['state'] == 'detail_expired'
+
+
+def test_delete_sqlite_respects_readers_source_identity_and_corrupt_details(tmp_path):
+    import sqlite3
+    path = tmp_path / 'run.sqlite'
+    directory = fixture(path)
+    with archive.detail_lease(path):
+        assert archive.delete_sqlite(directory)['state'] == 'reader_active'
+    assert path.exists()
+    with sqlite3.connect(path) as db:
+        db.execute('UPDATE result_state SET revision=revision+1')
+    with pytest.raises(ValueError, match='source_changed'):
+        archive.delete_sqlite(directory)
+    with sqlite3.connect(path) as db:
+        db.execute('UPDATE result_state SET revision=revision-1')
+    target = directory / 'details' / 'request_facts.parquet'
+    target.write_bytes(target.read_bytes() + b'corrupt')
+    with pytest.raises((ValueError, OSError)):
+        archive.delete_sqlite(directory)
+    assert path.exists()
+
+
+def test_automatic_compression_failure_preserves_sqlite(tmp_path):
+    path = tmp_path / 'failed.sqlite'
+    with patch.object(pq, 'ParquetWriter', side_effect=OSError('disk full')):
+        with pytest.raises(ResultArchiveError, match='disk full'):
+            fixture(path, settings={'delete_db_after_archive': True})
+    assert SQLiteResultReader(path).summary('run')['turn_count'] == 16
+    assert not archive.archive_path(path).exists()
+
+
+def test_deferred_sealing_keeps_automatic_compression_policy(tmp_path):
+    live = tmp_path / 'live.sqlite'
+    run = Run(name='active Run', id='other')
+    backend = SQLiteSaver({'path': str(live)}).create_backend(
+        _snapshot(RunRecord, run), SaverContext(tmp_path, CancellationToken()))
+    backend.open()
+    path = tmp_path / 'finished.sqlite'
+    directory = fixture(path, settings={'delete_db_after_archive': True})
+    assert path.exists() and not directory.exists()
+    backend.finalize(replace(_snapshot(RunRecord, run), status='cancelled', finished_at=FINISHED))
+    backend.close()
+    assert not path.exists() and directory.exists()
+    assert live.exists()
+    assert analyze([directory], 'SELECT count(*) AS n FROM requests', details=True)['items'] == [{'n': 16}]
+
+
+def test_storage_settings_validate_only_supported_types():
+    from perf_benchmark.plugins.saver.sqlite import parse_settings
+    assert parse_settings({'path': 'run.db'})['delete_db_after_archive'] is False
+    for settings in ({'delete_db_after_archive': 1}, {'detail_retention_days': True},
+                     {'detail_retention_days': -1}, {'detail_retention_days': 0.5}):
+        with pytest.raises(ValueError):
+            parse_settings({'path': 'run.db', **settings})
+
+
+def test_archive_verify_restore_cli(tmp_path, capsys):
+    import json
+    from perf_benchmark.app.main import console_main as main
+    path = tmp_path / 'run.sqlite'
+    directory = fixture(path)
+    assert main(['results', 'archive', str(path), '--delete-db']) == 0
+    assert json.loads(capsys.readouterr().out)['state'] == 'sqlite_removed'
+    assert main(['results', 'verify', str(directory)]) == 0
+    assert json.loads(capsys.readouterr().out)['state'] == 'verified'
+    restored = tmp_path / 'recovered.sqlite'
+    assert main(['results', 'restore', str(directory), '--output', str(restored)]) == 0
+    assert capsys.readouterr().out.strip() == str(restored)
+    assert SQLiteResultReader(restored).request_page('run')['total'] == 16

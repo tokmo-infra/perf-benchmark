@@ -30,7 +30,7 @@
 - 领域层级固定为 `Run -> Trial -> Session -> Turn`；Attempt、测量事实和场景判定作为关联事实保存。
 - 添加依赖或自行实现功能前，优先使用项目中已有且持续维护的库。
 - 设计新能力前先查看成熟工具对同类问题的解决方式，结合本项目的测量语义和扩展契约取舍。
-- 每次 Run 执行期间由单 writer 将权威事实写入 SQLite；结束后原子封存为同身份 Parquet，summary 长期保留，SQLite 与完整 details 从 Run.finished_at 起保留七天。统一 ResultReader 校验身份并路由已封存结果。Run 权威结果格式为 SQLite 和同身份 Parquet；报告从读取器中的事实和正式指标派生。
+- 每次 Run 执行期间由单 writer 将权威事实写入 SQLite；结束后原子封存为同身份 Zstd Parquet，summary 长期保留，SQLite 与完整 details 默认从 Run.finished_at 起保留七天。`detail_retention_days` 接受正整数天数或表示长期保留的 null。`delete_db_after_archive=true` 在 writer、exporter 收尾及全部归档文件校验完成后删除重复 SQLite/WAL/SHM，保留完整压缩事实；活动 reader 租约使删除延后。策略随 Run 保存并供延迟封存使用。统一 ResultReader 校验身份并路由已封存结果，压缩明细通过 analyze 查询或 restore 按批恢复数据库；恢复采用排他原子发布并保留原数据库身份。报告从读取器中的事实和正式指标派生。
 - 离线命令生成的数据集、画像、manifest，以及内部 HF cache / 临时 BlobStore 由所属模块管理格式与生命周期。DuckDB 和 PyArrow 用于内部处理与聚合。
 
 ## 稳定 Pipeline

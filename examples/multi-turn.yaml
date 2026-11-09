@@ -56,6 +56,8 @@ pipeline:
     plugin: sqlite
     settings:
       path: debug/results/multi-turn-001.db
+      delete_db_after_archive: true # 表格导出及归档校验后清除重复数据库。
+      detail_retention_days: null # 长期保留压缩请求事实，供后续复核。
   exporter:
     plugins:
       - plugin: tabular

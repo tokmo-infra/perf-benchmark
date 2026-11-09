@@ -84,5 +84,8 @@ uv run perf-benchmark results serve --root /absolute/results --host 127.0.0.1 --
 ```
 
 打开 `http://127.0.0.1:8088/#/runs` 查看结果。运行中的事实写入 SQLite；结束后由 Saver 封存为 Parquet。
-汇总长期保留，SQLite 与完整明细从 Run 结束起保留七天；`report/export` 通过统一读取器访问可用结果。
+汇总长期保留，SQLite 与完整明细默认从 Run 结束起保留七天；`report/export` 通过统一读取器访问可用结果。
+`saver.settings.delete_db_after_archive: true` 在压缩归档校验通过后删除重复的 SQLite；
+配合 `detail_retention_days: null` 长期保留压缩请求事实，供后续校验、复算和按需恢复数据库。
+配置及历史结果处理命令见[结果存储与压缩](docs/user-guide.md#压缩归档与校验)。
 每次 Run 的 SQLite 路径由 saver.path 指定，默认 Excel 位于其同级的 `<数据库名>-tables/results.xlsx`；`exporter.output` 可显式指定导出目录。相对路径按 YAML 目录解析。

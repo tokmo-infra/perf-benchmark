@@ -60,6 +60,13 @@ def parser() -> argparse.ArgumentParser:
     compact.add_argument("--compress-metrics", action="store_true")
     archive = result_commands.add_parser("archive")
     archive.add_argument("database", type=Path)
+    archive.add_argument("--delete-db", action="store_true",
+                         help="Remove duplicate SQLite after compressed facts verify")
+    verify = result_commands.add_parser("verify")
+    verify.add_argument("archive", type=Path)
+    restore = result_commands.add_parser("restore")
+    restore.add_argument("archive", type=Path)
+    restore.add_argument("--output", type=Path, required=True)
     analyze = result_commands.add_parser("analyze")
     analyze.add_argument("archives", nargs="+", type=Path)
     analyze.add_argument("--sql", required=True)
@@ -215,10 +222,20 @@ def console_main(argv: list[str] | None = None) -> int:
                                          compress=args.compress_metrics), ensure_ascii=False))
                 return 0
             if args.results_command != "serve":
-                from perf_benchmark.plugins.saver.sqlite.archive import cleanup, seal
+                from perf_benchmark.plugins.saver.sqlite.archive import cleanup, delete_sqlite, seal
                 from perf_benchmark.plugins.saver.sqlite.parquet_reader import analyze
                 if args.results_command == "archive":
-                    print(seal(args.database))
+                    directory = seal(args.database)
+                    if args.delete_db:
+                        print(json.dumps(delete_sqlite(directory), ensure_ascii=False))
+                    else:
+                        print(directory)
+                elif args.results_command == "verify":
+                    from perf_benchmark.plugins.saver.sqlite.archive_tools import verify
+                    print(json.dumps(verify(args.archive), ensure_ascii=False))
+                elif args.results_command == "restore":
+                    from perf_benchmark.plugins.saver.sqlite.archive_tools import restore
+                    print(restore(args.archive, args.output))
                 elif args.results_command == "analyze":
                     print(json.dumps(analyze(args.archives, args.sql, details=args.details), ensure_ascii=False))
                 else:
