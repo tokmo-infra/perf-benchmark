@@ -36,6 +36,7 @@ pub struct Outcome {
     pub samples: Vec<[i64; 3]>,
     pub output_chars: i64,
     pub usage: BTreeMap<String, i64>,
+    pub server_metrics: BTreeMap<String, f64>,
     pub finish_reason: Option<String>,
     pub continuation: Option<serde_json::Value>,
     pub continuation_valid: bool,

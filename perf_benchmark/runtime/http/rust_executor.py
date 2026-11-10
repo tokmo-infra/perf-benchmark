@@ -136,6 +136,7 @@ class RustHttpExecutorRuntime(RequestRuntime):
             for key in ("trigger_ns", "decision_ns", "applied_ns"):
                 setattr(result, key, getattr(value, key))
             request = result.request
+            request.server_metrics = value.server_metrics
             request.attempts, request.response_mode = result.attempt, "stream" if spec.streaming else "non_stream"
             request.started_ns, request.response_completed_ns = value.started_ns, value.completed_ns
             request.http_status, request.output_chars = value.http_status, value.output_chars

@@ -87,7 +87,8 @@ class StandardMetricsBackend(WindowCalculations, DistributionCalculations):
               prefill DOUBLE, decode DOUBLE,
               decode_tokens BIGINT, decode_ns BIGINT, turn_total_duration DOUBLE, output_kind VARCHAR,
               system_tokens BIGINT, ttft_reason VARCHAR, tpot_reason VARCHAR, e2e_reason VARCHAR,
-              event_yield DOUBLE, acceptance_proxy DOUBLE, event_yield_reason VARCHAR
+              event_yield DOUBLE, acceptance_proxy DOUBLE, event_yield_reason VARCHAR,
+              server_generation_time DOUBLE, server_tpot DOUBLE, server_decode_throughput DOUBLE
             );
             CREATE TEMP TABLE attempts(
               trial_id VARCHAR, turn_id VARCHAR, attempt BIGINT, status VARCHAR,

@@ -13,6 +13,7 @@ pub struct Content {
     pub kind: &'static str,
     pub chars: i64,
     pub usage: BTreeMap<String, i64>,
+    pub server_metrics: BTreeMap<String, f64>,
     pub finish: String,
     pub continuation: Option<serde_json::Value>,
     pub valid: bool,

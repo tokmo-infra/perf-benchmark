@@ -23,7 +23,8 @@ REVENUE_NAMES = (
     "output_revenue_per_minute",
 )
 LATENCY_NAMES = ("ttft", "tpot", "e2e", "itl", "prefill_throughput", "decode_throughput",
-                 "time_to_last_output", "response_drain", "input_tokens", "output_tokens")
+                 "time_to_last_output", "response_drain", "input_tokens", "output_tokens",
+                 "server_generation_time", "server_tpot", "server_decode_throughput")
 
 
 def latency_points(backend, trial, start, minutes, session_count, reason):

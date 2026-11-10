@@ -62,6 +62,8 @@ def _computed(fact: TurnFact | SessionFact, metrics):
             )), metadata=fact.metadata, metrics=metrics,
         )
     request = {name: getattr(fact, source) for name, source in _REQUEST_FIELDS.items()}
+    if request.get("server_metrics") is None:
+        request.pop("server_metrics", None)
     for name in ("profile", "trace_context"):
         value = request[name]
         if value is not None:
@@ -226,7 +228,9 @@ class MetricsCollector:
         values.update({name: getattr(result if result is not None else turn, name)
                        for name in ("status", "error", "scenario_passed")})
         return (AttemptFact if result is not None else TurnFact)(
-            **values, **{target: getattr(request, name) for name, target in _REQUEST_FIELDS.items()},
+            **values, **{target: freeze_snapshot(getattr(request, name))
+                         if name == "server_metrics" else getattr(request, name)
+                         for name, target in _REQUEST_FIELDS.items()},
             trial_id=self.trial_id,
             usage=freeze_snapshot(result.usage if result is not None else turn.usage),
             metadata=freeze_snapshot({**turn.metadata, **({

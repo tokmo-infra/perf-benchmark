@@ -63,6 +63,7 @@ class TurnFact:
     result_ready_ns: int | None = None
     trace_context: TraceContext | None = None
     profile: RequestProfile | None = None
+    server_metrics: Mapping[str, float] | None = None
 
 
 

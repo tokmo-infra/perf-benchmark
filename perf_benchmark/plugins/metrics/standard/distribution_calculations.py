@@ -16,6 +16,9 @@ _DISTRIBUTION_SOURCES = {
     "output_tokens": "server_usage",
     "ttft": "protocol_output_event",
     "tpot": "protocol_output_event+server_usage",
+    "server_generation_time": "server_generation_time_ms",
+    "server_tpot": "server_generation_time_ms+server_usage",
+    "server_decode_throughput": "server_generation_time_ms+server_usage",
     "e2e": "client_clock",
     "turn_total_duration": "client_clock",
     "time_to_last_output": "response_output_clock",
@@ -50,9 +53,11 @@ class DistributionCalculations:
                 SELECT unnest(['input_tokens','output_tokens','ttft','tpot','e2e',
                                'time_to_last_output','response_drain',
                                'prefill_throughput','decode_throughput','turn_total_duration',
-                               'output_tokens_per_event_estimate','speculative_acceptance_proxy']) AS metric,
+                               'output_tokens_per_event_estimate','speculative_acceptance_proxy',
+                               'server_generation_time','server_tpot','server_decode_throughput']) AS metric,
                        unnest([prompt,completion,ttft,tpot,e2e,time_to_last_output,
-                               response_drain,prefill,decode,turn_total_duration,event_yield,acceptance_proxy]) AS value FROM cohort
+                               response_drain,prefill,decode,turn_total_duration,event_yield,acceptance_proxy,
+                               server_generation_time,server_tpot,server_decode_throughput]) AS value FROM cohort
                 UNION ALL
                 SELECT 'itl', i.value FROM itl i JOIN cohort t USING(trial_id,turn_id)
                 UNION ALL
