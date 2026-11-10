@@ -109,8 +109,16 @@ impl Decoder for Chat {
         }
         // Server engine durations are separate from client-visible SSE clocks.
         // Tool parsers and network batching may release many deltas together.
-        for key in ["generation_time_ms", "mean_itl_ms", "queue_time_ms", "time_to_first_token_ms"] {
-            if let Some(value) = v["metrics"][key].as_f64().filter(|v| v.is_finite() && *v >= 0.0) {
+        for key in [
+            "generation_time_ms",
+            "mean_itl_ms",
+            "queue_time_ms",
+            "time_to_first_token_ms",
+        ] {
+            if let Some(value) = v["metrics"][key]
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+            {
                 self.server_metrics.insert(key.into(), value);
             }
         }
