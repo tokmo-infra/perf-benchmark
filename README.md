@@ -8,6 +8,7 @@ maxTPM 从首遍完成指定比例的轮次时开始。选中会话数恰为预�
 - [使用与部署指南](docs/user-guide.md)：安装、YAML、并发/用户池、数据、TPM/收入、CSV/Excel、Docker 与观测。
 - [静态 Prefill & Decode 压测指南](docs/static-benchmark-guide.md)：分词表随机抽取、输入长度与并发矩阵、复杂系统编程长文本、思考档位与 Excel 导出。
 - [开发指南](docs/development-guide.md)：模块职责、插件与 Hook、计时及存储契约、测试和代码提交范围。
+- [服务端生成计时](docs/server-decode-timing.md)：工具调用缓冲时，独立报告引擎生成时长、TPOT 与样本覆盖，不替换客户端指标。
 - 代表性示例：[静态 Prefill 与 Decode 压测](examples/static-benchmark.yaml)使用本地 tokenizer 生成输入；[静态固定并发](examples/source-only-openai.yaml)、[动态并发扫描与 SLO](examples/concurrency-sweep.yaml)、[多轮对话](examples/multi-turn.yaml)共用小样本，演示请求流程与配置方式。
 
 ```bash

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 
 from perf_benchmark.plugins.metrics.standard.catalog import METRIC_CATALOG, public_value
 
@@ -75,7 +76,35 @@ def request_values(fact):
     events = fact.output_event_count
     event_yield = ((completion - 1) / (events - 1)
                    if stream and text and completion is not None and completion >= events > 1 else None)
+    server_metrics = getattr(fact, "server_metrics", None)
+    generation = server_metrics.get("generation_time_ms") if isinstance(server_metrics, Mapping) else None
+    try:
+        generation = float(generation) if type(generation) in (int, float) else None
+        if generation is None or not math.isfinite(generation) or generation <= 0:
+            generation = None
+    except (OverflowError, ValueError):
+        generation = None
+    server_tokens = completion - 1 if completion is not None and completion > 1 else None
+    if server_tokens is None:
+        generation = None
+    server_tpot = server_rate = None
+    if generation is not None and server_tokens is not None:
+        try:
+            server_tpot = generation / server_tokens
+            if not math.isfinite(server_tpot) or server_tpot <= 0:
+                server_tpot = None
+        except (OverflowError, ZeroDivisionError):
+            server_tpot = None
+        try:
+            server_rate = server_tokens / (generation / 1000.0)
+            if not math.isfinite(server_rate) or server_rate <= 0:
+                server_rate = None
+        except (OverflowError, ZeroDivisionError):
+            server_rate = None
     return {
+        "server_generation_time": generation,
+        "server_tpot": server_tpot,
+        "server_decode_throughput": server_rate,
         "ttft": ttft,
         "tpot": decode_ns / 1e6 / decode_tokens
         if decode_ns is not None and decode_tokens is not None
@@ -117,6 +146,9 @@ def itl_values(fact):
 
 def request_metrics(turn, derived):
     values = (
+        ("server_generation_time", derived["server_generation_time"], "server_generation_time_ms"),
+        ("server_tpot", derived["server_tpot"], "server_generation_time_ms+server_usage"),
+        ("server_decode_throughput", derived["server_decode_throughput"], "server_generation_time_ms+server_usage"),
         ("input_tokens", integer(turn.usage.get("prompt_tokens")), "server_usage"),
         ("output_tokens", integer(turn.usage.get("completion_tokens")), "server_usage"),
         ("ttft", derived["ttft"], "protocol_output_event"),
@@ -166,6 +198,12 @@ def _turn_unavailable_reason(
     first_ns: object,
     last_ns: object,
 ) -> str:
+    if name in {"server_generation_time", "server_tpot", "server_decode_throughput"}:
+        if completion is None:
+            return "usage_not_reported"
+        if completion <= 1:
+            return "insufficient_output_tokens"
+        return "server_generation_time_not_observed_or_invalid"
     if name in {"output_tokens_per_event_estimate", "speculative_acceptance_proxy"}:
         if mode != "stream":
             return "non_streaming_response" if mode == "non_stream" else "response_mode_not_observed"

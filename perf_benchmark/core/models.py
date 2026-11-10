@@ -127,6 +127,7 @@ class RequestMeasurements:
     result_ready_ns: int | None = None
     trace_context: TraceContext | None = None
     profile: RequestProfile | None = None
+    server_metrics: dict[str, float] | None = None
 
 
 @dataclass(slots=True)

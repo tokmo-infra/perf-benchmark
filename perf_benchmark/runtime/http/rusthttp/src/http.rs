@@ -420,6 +420,7 @@ impl Http {
         let (content, finish_error) = decoder.finish(out.status);
         out.output_chars = content.chars;
         out.usage = content.usage;
+        out.server_metrics = content.server_metrics;
         out.output_kind = if content.kind.is_empty() {
             "text"
         } else {

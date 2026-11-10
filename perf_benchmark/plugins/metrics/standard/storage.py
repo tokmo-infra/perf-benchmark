@@ -49,6 +49,9 @@ _TURN_COLUMNS = (
     "event_yield",
     "acceptance_proxy",
     "event_yield_reason",
+    "server_generation_time",
+    "server_tpot",
+    "server_decode_throughput",
 )
 TURN_SCHEMA = pa.schema(
     [
@@ -71,6 +74,9 @@ TURN_SCHEMA = pa.schema(
                 "turn_total_duration",
                 "event_yield",
                 "acceptance_proxy",
+                "server_generation_time",
+                "server_tpot",
+                "server_decode_throughput",
             }
             else pa.int64(),
         )
@@ -137,6 +143,9 @@ def turn_row(fact, values, metrics):
         values["output_tokens_per_event_estimate"],
         values["speculative_acceptance_proxy"],
         metrics["output_tokens_per_event_estimate"].unavailable_reason,
+        values["server_generation_time"],
+        values["server_tpot"],
+        values["server_decode_throughput"],
     )
 
 

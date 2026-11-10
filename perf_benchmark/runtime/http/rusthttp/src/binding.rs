@@ -615,6 +615,11 @@ fn result_into_py(py: Python<'_>, value: Outcome) -> PyResult<Py<PyAny>> {
         value.decision_ns.into_py_any(py)?,
         value.applied_ns.into_py_any(py)?,
         value.transport_sent_ns.into_py_any(py)?,
+        if value.server_metrics.is_empty() {
+            py.None()
+        } else {
+            value.server_metrics.into_py_any(py)?
+        },
     ];
     class.call1(py, PyTuple::new(py, fields)?)
 }

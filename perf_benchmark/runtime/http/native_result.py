@@ -22,3 +22,4 @@ class NativeResult(NamedTuple):
     decision_ns: int | None
     applied_ns: int | None
     transport_sent_ns: int | None = None
+    server_metrics: dict[str, float] | None = None

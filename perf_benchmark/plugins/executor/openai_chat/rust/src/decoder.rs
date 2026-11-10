@@ -16,6 +16,7 @@ struct Chat {
     terminal_choice: bool,
     chars: i64,
     usage: BTreeMap<String, i64>,
+    server_metrics: BTreeMap<String, f64>,
     finish: String,
     text: String,
     reasoning: String,
@@ -106,6 +107,21 @@ impl Decoder for Chat {
         {
             self.usage.insert("cached_tokens".into(), n);
         }
+        // Server engine durations are separate from client-visible SSE clocks.
+        // Tool parsers and network batching may release many deltas together.
+        for key in [
+            "generation_time_ms",
+            "mean_itl_ms",
+            "queue_time_ms",
+            "time_to_first_token_ms",
+        ] {
+            if let Some(value) = v["metrics"][key]
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+            {
+                self.server_metrics.insert(key.into(), value);
+            }
+        }
         let choices = v["choices"].as_array();
         if !streaming {
             let choice = choices
@@ -182,6 +198,7 @@ impl Decoder for Chat {
             Content {
                 chars: self.chars,
                 usage: std::mem::take(&mut self.usage),
+                server_metrics: std::mem::take(&mut self.server_metrics),
                 finish: self.finish.clone(),
                 continuation,
                 valid,
